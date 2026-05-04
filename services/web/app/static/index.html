@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RAG Console</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>RAG Console</h1>
+    <span class="hint">Upload documents, watch them index, then ask questions.</span>
+  </header>
+
+  <main class="grid">
+    <section class="panel" id="upload-panel">
+      <h2>1. Upload</h2>
+      <form id="upload-form">
+        <label class="field">
+          <span>File</span>
+          <input type="file" id="file-input" required />
+        </label>
+        <label class="field">
+          <span>Collection (optional)</span>
+          <input type="text" id="collection-input" placeholder="e.g. handbook" />
+        </label>
+        <button type="submit" id="upload-btn">Upload</button>
+        <p class="status" id="upload-status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="panel" id="docs-panel">
+      <h2>2. Documents</h2>
+      <p class="muted" id="docs-empty">No documents yet. Upload one to get started.</p>
+      <ul id="docs-list" class="docs"></ul>
+    </section>
+
+    <section class="panel chat" id="chat-panel">
+      <h2>3. Ask</h2>
+      <div class="chat-controls">
+        <label class="field inline">
+          <span>Scope</span>
+          <select id="scope-select">
+            <option value="">All completed documents</option>
+          </select>
+        </label>
+      </div>
+      <div id="chat-log" class="chat-log" aria-live="polite"></div>
+      <form id="chat-form" class="chat-form">
+        <textarea id="question-input" rows="2" placeholder="Ask a question about the indexed documents..." required></textarea>
+        <button type="submit" id="ask-btn">Ask</button>
+      </form>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

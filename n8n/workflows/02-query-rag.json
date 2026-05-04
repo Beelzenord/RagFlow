@@ -1,0 +1,55 @@
+{
+  "name": "RAG · Ask Question",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag/ask",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-ask",
+      "name": "Webhook: Ask",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "webhookId": "rag-ask"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.QUERY_URL}}/query",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key",    "value": "={{$env.SERVICE_API_KEY}}" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({ question: $json.question, document_id: $json.document_id, collection: $json.collection, user_id: $json.user_id, top_k: $json.top_k }) }}"
+      },
+      "id": "http-query",
+      "name": "POST /query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}"
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [820, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Ask": { "main": [[{ "node": "POST /query", "type": "main", "index": 0 }]] },
+    "POST /query":  { "main": [[{ "node": "Respond",     "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

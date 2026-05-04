@@ -1,0 +1,148 @@
+# Local-dev stack for the document RAG MVP.
+# Start everything:   docker compose up -d --build
+# Tail one service:   docker compose logs -f ingestion
+
+x-python-env: &python-env
+  POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+  POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  POSTGRES_DB: ${POSTGRES_DB:-postgres}
+  POSTGRES_USER: ${POSTGRES_USER:-postgres}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+  REDIS_HOST: ${REDIS_HOST:-redis}
+  REDIS_PORT: ${REDIS_PORT:-6379}
+  LLAMA_CLOUD_API_KEY: ${LLAMA_CLOUD_API_KEY}
+  LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+  LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+  LLM_API_KEY: ${LLM_API_KEY}
+  LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+  EMBEDDING_DIM: ${EMBEDDING_DIM:-1536}
+  EMBEDDING_API_KEY: ${EMBEDDING_API_KEY}
+  EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
+  STORAGE_DIR: ${STORAGE_DIR:-/data/storage}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
+  ALLOWED_MIME_TYPES: ${ALLOWED_MIME_TYPES:-application/pdf,image/jpeg,image/jpg,image/png}
+  CHUNK_SIZE: ${CHUNK_SIZE:-1024}
+  CHUNK_OVERLAP: ${CHUNK_OVERLAP:-128}
+  RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-6}
+  RETRIEVAL_MIN_SCORE: ${RETRIEVAL_MIN_SCORE:-0.0}
+  SERVICE_API_KEY: ${SERVICE_API_KEY}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: rag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: services/ingestion/Dockerfile
+    container_name: rag-ingestion
+    restart: unless-stopped
+    environment: *python-env
+    ports:
+      - "${INGESTION_PORT:-8001}:8001"
+    volumes:
+      - ./storage:/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  query:
+    build:
+      context: .
+      dockerfile: services/query/Dockerfile
+    container_name: rag-query
+    restart: unless-stopped
+    environment: *python-env
+    ports:
+      - "${QUERY_PORT:-8002}:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: services/web/Dockerfile
+    container_name: rag-web
+    restart: unless-stopped
+    environment:
+      INGESTION_URL: http://ingestion:8001
+      QUERY_URL: http://query:8002
+      SERVICE_API_KEY: ${SERVICE_API_KEY}
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      - ingestion
+      - query
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: rag-n8n
+    restart: unless-stopped
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-change-me}
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-Europe/Stockholm}
+      EXECUTIONS_MODE: ${EXECUTIONS_MODE:-regular}
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: ${POSTGRES_HOST:-postgres}
+      DB_POSTGRESDB_PORT: ${POSTGRES_PORT:-5432}
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-postgres}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-postgres}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      QUEUE_BULL_REDIS_HOST: ${REDIS_HOST:-redis}
+      QUEUE_BULL_REDIS_PORT: ${REDIS_PORT:-6379}
+      INGESTION_URL: http://ingestion:8001
+      QUERY_URL: http://query:8002
+      SERVICE_API_KEY: ${SERVICE_API_KEY}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  n8n_data:

@@ -1,0 +1,62 @@
+{
+  "name": "RAG · Ingest Document",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag/ingest",
+        "responseMode": "responseNode",
+        "options": { "binaryPropertyName": "file" }
+      },
+      "id": "webhook-ingest",
+      "name": "Webhook: Upload",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "webhookId": "rag-ingest"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.INGESTION_URL}}/ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{$env.SERVICE_API_KEY}}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            { "parameterType": "formBinaryData", "name": "file", "inputDataFieldName": "file" },
+            { "name": "user_id",    "value": "={{$json.user_id || ''}}" },
+            { "name": "collection", "value": "={{$json.collection || ''}}" }
+          ]
+        },
+        "options": { "response": { "response": { "fullResponse": false } } }
+      },
+      "id": "http-ingest",
+      "name": "POST /ingest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}"
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [820, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Upload": { "main": [[{ "node": "POST /ingest", "type": "main", "index": 0 }]] },
+    "POST /ingest":    { "main": [[{ "node": "Respond",      "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
