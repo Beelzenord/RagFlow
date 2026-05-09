@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -10,6 +11,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     UploadFile,
     status,
 )
@@ -95,6 +97,68 @@ async def get_document(document_id: UUID) -> dict[str, Any]:
     if not row:
         raise HTTPException(404, "document not found")
     return dict(row)
+
+
+@app.get("/documents", dependencies=[Depends(require_service_key)])
+async def list_documents(
+    collection: str | None = Query(default=None),
+    user_id: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> dict[str, Any]:
+    clauses: list[str] = []
+    params: dict[str, Any] = {"limit": limit}
+    if collection:
+        clauses.append("d.collection = :collection")
+        params["collection"] = collection
+    if user_id:
+        clauses.append("d.user_id = :user_id")
+        params["user_id"] = user_id
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = (
+        "SELECT id, original_filename, file_type, status, error_message, "
+        "       collection, user_id, created_at, updated_at, "
+        "       (SELECT count(*) FROM document_chunks WHERE document_id = d.id) AS chunk_count "
+        f"FROM documents d {where} "
+        "ORDER BY created_at DESC LIMIT :limit"
+    )
+    async with session_scope() as session:
+        rows = (await session.execute(text(sql), params)).mappings().all()
+    return {"documents": [dict(r) for r in rows]}
+
+
+def _delete_files(document_id: str, storage_path: str | None) -> None:
+    """Best-effort removal of original + markdown files. Never raises."""
+    candidates = []
+    if storage_path:
+        candidates.append(Path(storage_path))
+    candidates.append(Path(settings.storage_dir) / "markdown" / f"{document_id}.md")
+    for p in candidates:
+        try:
+            p.unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning("could not unlink %s: %s", p, exc)
+
+
+@app.delete("/documents/{document_id}", dependencies=[Depends(require_service_key)])
+async def delete_document(document_id: UUID) -> dict[str, Any]:
+    async with session_scope() as session:
+        row = (
+            await session.execute(
+                text("SELECT storage_path FROM documents WHERE id = :id"),
+                {"id": str(document_id)},
+            )
+        ).first()
+        if not row:
+            raise HTTPException(404, "document not found")
+        storage_path = row[0]
+        await session.execute(
+            text("DELETE FROM documents WHERE id = :id"),
+            {"id": str(document_id)},
+        )
+
+    _delete_files(str(document_id), storage_path)
+    log.info("deleted document_id=%s", document_id)
+    return {"document_id": str(document_id), "deleted": True}
 
 
 @app.post("/documents/{document_id}/reprocess", dependencies=[Depends(require_service_key)])

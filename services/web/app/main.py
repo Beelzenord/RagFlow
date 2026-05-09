@@ -14,7 +14,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -71,11 +71,49 @@ async def api_upload(
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
+@app.get("/api/documents")
+async def api_documents(
+    collection: str | None = None,
+    user_id: str | None = None,
+    limit: int | None = None,
+) -> JSONResponse:
+    params: dict[str, Any] = {}
+    if collection:
+        params["collection"] = collection
+    if user_id:
+        params["user_id"] = user_id
+    if limit is not None:
+        params["limit"] = limit
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        try:
+            resp = await client.get(
+                f"{INGESTION_URL}/documents",
+                headers=_auth_headers(),
+                params=params,
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
+    return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
+
+
 @app.get("/api/documents/{document_id}")
 async def api_document(document_id: UUID) -> JSONResponse:
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         try:
             resp = await client.get(
+                f"{INGESTION_URL}/documents/{document_id}",
+                headers=_auth_headers(),
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
+    return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
+
+
+@app.delete("/api/documents/{document_id}")
+async def api_document_delete(document_id: UUID) -> JSONResponse:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        try:
+            resp = await client.delete(
                 f"{INGESTION_URL}/documents/{document_id}",
                 headers=_auth_headers(),
             )
@@ -105,6 +143,54 @@ async def api_query(body: QueryBody) -> JSONResponse:
         except httpx.HTTPError as exc:
             raise HTTPException(502, f"query service unreachable: {exc}") from exc
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
+
+
+@app.post("/api/query/stream")
+async def api_query_stream(body: QueryBody) -> StreamingResponse:
+    """Forward NDJSON streaming bytes from the query service to the browser.
+
+    No buffering: each chunk from upstream is yielded as-is so tokens reach
+    the UI as soon as the LLM produces them.
+    """
+    payload = body.model_dump(exclude_none=True)
+
+    async def upstream() -> Any:
+        client = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
+        try:
+            async with client.stream(
+                "POST",
+                f"{QUERY_URL}/query/stream",
+                headers=_auth_headers({"content-type": "application/json"}),
+                json=payload,
+            ) as resp:
+                if resp.status_code >= 400:
+                    body_bytes = await resp.aread()
+                    msg = body_bytes.decode(errors="replace")[:500] or f"HTTP {resp.status_code}"
+                    yield (
+                        '{"type":"error","message":'
+                        + _json_str(f"upstream {resp.status_code}: {msg}")
+                        + "}\n"
+                    ).encode("utf-8")
+                    return
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        yield chunk
+        except httpx.HTTPError as exc:
+            yield (
+                '{"type":"error","message":'
+                + _json_str(f"query service unreachable: {exc}")
+                + "}\n"
+            ).encode("utf-8")
+        finally:
+            await client.aclose()
+
+    return StreamingResponse(upstream(), media_type="application/x-ndjson")
+
+
+def _json_str(s: str) -> str:
+    import json as _json
+
+    return _json.dumps(s, ensure_ascii=False)
 
 
 def _safe_json(resp: httpx.Response) -> Any:

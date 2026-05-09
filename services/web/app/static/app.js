@@ -1,13 +1,17 @@
 // RAG Console - vanilla JS frontend.
-// Persists uploaded document IDs in localStorage, polls /api/documents/{id}
-// until status is terminal, and chats against /api/query.
+// The server (ingestion service) is the source of truth for the documents
+// list. localStorage is kept only as a paint cache so reloads don't flash an
+// empty list before the first /api/documents response lands.
 
 const STORAGE_KEY = "rag.docs.v1";
+const REFRESH_MS = 5000;
 const POLL_MS = 2000;
 
 const state = {
-  docs: loadDocs(),
+  docs: loadDocsCache(),
   pollers: new Map(),
+  refreshHandle: null,
+  pendingDeletes: new Set(),
 };
 
 const els = {
@@ -25,7 +29,7 @@ const els = {
   askBtn: document.getElementById("ask-btn"),
 };
 
-function loadDocs() {
+function loadDocsCache() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
@@ -36,19 +40,37 @@ function loadDocs() {
   }
 }
 
-function saveDocs() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.docs));
+function saveDocsCache() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.docs));
+  } catch {
+    /* storage full / disabled - ignore */
+  }
 }
 
-function upsertDoc(doc) {
-  const idx = state.docs.findIndex((d) => d.id === doc.id);
-  if (idx === -1) {
-    state.docs.unshift(doc);
-  } else {
-    state.docs[idx] = { ...state.docs[idx], ...doc };
+function normalizeDoc(d) {
+  return {
+    id: d.id,
+    status: d.status,
+    chunk_count: d.chunk_count,
+    error_message: d.error_message,
+    filename: d.original_filename || d.filename || d.id,
+    collection: d.collection,
+  };
+}
+
+async function refreshDocs() {
+  try {
+    const resp = await fetch("/api/documents");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    const list = Array.isArray(data?.documents) ? data.documents : [];
+    state.docs = list.map(normalizeDoc);
+    saveDocsCache();
+    renderDocs();
+  } catch (err) {
+    console.warn("refreshDocs failed", err);
   }
-  saveDocs();
-  renderDocs();
 }
 
 function isTerminal(status) {
@@ -61,6 +83,7 @@ function renderDocs() {
   for (const d of state.docs) {
     const li = document.createElement("li");
     li.className = "doc";
+    li.dataset.id = d.id;
 
     const row = document.createElement("div");
     row.className = "doc-row";
@@ -69,11 +92,22 @@ function renderDocs() {
     name.className = "doc-name";
     name.textContent = d.filename || d.id;
 
+    const actions = document.createElement("div");
+    actions.className = "doc-actions";
+
     const badge = document.createElement("span");
     badge.className = `badge ${d.status || "uploaded"}`;
     badge.textContent = d.status || "uploaded";
 
-    row.append(name, badge);
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "btn-danger";
+    delBtn.textContent = "Delete";
+    delBtn.disabled = state.pendingDeletes.has(d.id);
+    delBtn.addEventListener("click", () => deleteDoc(d, li));
+
+    actions.append(badge, delBtn);
+    row.append(name, actions);
 
     const meta = document.createElement("div");
     meta.className = "doc-meta";
@@ -124,21 +158,66 @@ function renderScopeOptions() {
   }
 }
 
+async function deleteDoc(doc, liNode) {
+  const label = doc.filename || doc.id;
+  if (!confirm(`Delete "${label}"?\nThis removes the embeddings and the stored file.`)) {
+    return;
+  }
+  state.pendingDeletes.add(doc.id);
+  const btn = liNode?.querySelector(".btn-danger");
+  if (btn) btn.disabled = true;
+
+  let inlineErr = liNode?.querySelector(".doc-error.delete-error");
+  if (inlineErr) inlineErr.remove();
+
+  try {
+    const resp = await fetch(`/api/documents/${doc.id}`, { method: "DELETE" });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      const msg = data?.detail || data?.error || `HTTP ${resp.status}`;
+      throw new Error(msg);
+    }
+    const poller = state.pollers.get(doc.id);
+    if (poller) {
+      clearInterval(poller);
+      state.pollers.delete(doc.id);
+    }
+    await refreshDocs();
+  } catch (err) {
+    if (liNode) {
+      const e = document.createElement("div");
+      e.className = "doc-error delete-error";
+      e.textContent = `Delete failed: ${err.message}`;
+      liNode.appendChild(e);
+    }
+    if (btn) btn.disabled = false;
+  } finally {
+    state.pendingDeletes.delete(doc.id);
+  }
+}
+
 function startPolling(docId) {
   if (state.pollers.has(docId)) return;
   const tick = async () => {
     try {
       const resp = await fetch(`/api/documents/${docId}`);
+      if (resp.status === 404) {
+        clearInterval(state.pollers.get(docId));
+        state.pollers.delete(docId);
+        await refreshDocs();
+        return;
+      }
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      upsertDoc({
-        id: docId,
-        status: data.status,
-        chunk_count: data.chunk_count,
-        error_message: data.error_message,
-        filename: data.original_filename,
-        collection: data.collection,
-      });
+      const idx = state.docs.findIndex((d) => d.id === docId);
+      const merged = normalizeDoc(data);
+      if (idx === -1) {
+        state.docs.unshift(merged);
+      } else {
+        state.docs[idx] = { ...state.docs[idx], ...merged };
+      }
+      saveDocsCache();
+      renderDocs();
       if (isTerminal(data.status)) {
         clearInterval(state.pollers.get(docId));
         state.pollers.delete(docId);
@@ -151,6 +230,27 @@ function startPolling(docId) {
   state.pollers.set(docId, handle);
   tick();
 }
+
+function startBackgroundRefresh() {
+  stopBackgroundRefresh();
+  state.refreshHandle = setInterval(refreshDocs, REFRESH_MS);
+}
+
+function stopBackgroundRefresh() {
+  if (state.refreshHandle) {
+    clearInterval(state.refreshHandle);
+    state.refreshHandle = null;
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopBackgroundRefresh();
+  } else {
+    refreshDocs();
+    startBackgroundRefresh();
+  }
+});
 
 els.uploadForm.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -172,12 +272,14 @@ els.uploadForm.addEventListener("submit", async (e) => {
       throw new Error(msg);
     }
     setStatus(els.uploadStatus, `Accepted. document_id=${data.document_id}`, "ok");
-    upsertDoc({
+    state.docs.unshift({
       id: data.document_id,
       status: data.status || "processing",
       filename: file.name,
       collection: collection || null,
     });
+    saveDocsCache();
+    renderDocs();
     startPolling(data.document_id);
     els.uploadForm.reset();
   } catch (err) {
@@ -197,25 +299,75 @@ els.chatForm.addEventListener("submit", async (e) => {
   els.questionInput.value = "";
   els.askBtn.disabled = true;
 
-  const pending = appendMessage("bot", "Thinking...");
+  const bubble = appendMessage("bot", "");
+  const answerNode = document.createElement("div");
+  answerNode.className = "answer";
+  answerNode.textContent = "...";
+  bubble.appendChild(answerNode);
+  let firstDeltaSeen = false;
+  let citationsNode = null;
+
+  const handleEvent = (evt) => {
+    if (!evt || typeof evt !== "object") return;
+    if (evt.type === "citations") {
+      if (Array.isArray(evt.data) && evt.data.length) {
+        citationsNode = renderCitations(evt.data);
+        bubble.appendChild(citationsNode);
+      }
+    } else if (evt.type === "delta") {
+      if (!firstDeltaSeen) {
+        answerNode.textContent = "";
+        firstDeltaSeen = true;
+      }
+      answerNode.appendChild(document.createTextNode(evt.text || ""));
+      els.chatLog.scrollTop = els.chatLog.scrollHeight;
+    } else if (evt.type === "error") {
+      bubble.classList.add("error");
+      answerNode.textContent = `Query failed: ${evt.message || "unknown error"}`;
+    } else if (evt.type === "done") {
+      if (!firstDeltaSeen) answerNode.textContent = "(empty answer)";
+    }
+  };
 
   try {
     const body = { question };
     if (documentId) body.document_id = documentId;
-    const resp = await fetch("/api/query", {
+    const resp = await fetch("/api/query/stream", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
+    if (!resp.ok || !resp.body) {
+      const data = await resp.json().catch(() => ({}));
       const msg = data?.detail || data?.error || `HTTP ${resp.status}`;
       throw new Error(msg);
     }
-    renderAnswer(pending, data);
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        try {
+          handleEvent(JSON.parse(line));
+        } catch (err) {
+          console.warn("bad ndjson line", line, err);
+        }
+      }
+    }
+    if (buf.trim()) {
+      try { handleEvent(JSON.parse(buf)); } catch (_) { /* ignore */ }
+    }
   } catch (err) {
-    pending.classList.add("error");
-    pending.textContent = `Query failed: ${err.message}`;
+    bubble.classList.add("error");
+    answerNode.textContent = `Query failed: ${err.message}`;
   } finally {
     els.askBtn.disabled = false;
   }
@@ -224,33 +376,25 @@ els.chatForm.addEventListener("submit", async (e) => {
 function appendMessage(role, text) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
-  div.textContent = text;
+  if (text) div.textContent = text;
   els.chatLog.appendChild(div);
   els.chatLog.scrollTop = els.chatLog.scrollHeight;
   return div;
 }
 
-function renderAnswer(node, data) {
-  node.textContent = "";
-  const answer = document.createElement("div");
-  answer.textContent = data.answer || "(empty answer)";
-  node.appendChild(answer);
-
-  if (Array.isArray(data.citations) && data.citations.length) {
-    const cites = document.createElement("div");
-    cites.className = "citations";
-    for (const c of data.citations) {
-      const line = document.createElement("div");
-      const loc = [c.filename, c.page_number ? `p.${c.page_number}` : null, c.heading]
-        .filter(Boolean)
-        .join(" - ");
-      const score = typeof c.score === "number" ? ` (score ${c.score.toFixed(2)})` : "";
-      line.textContent = `[${c.n}] ${loc}${score}`;
-      cites.appendChild(line);
-    }
-    node.appendChild(cites);
+function renderCitations(list) {
+  const cites = document.createElement("div");
+  cites.className = "citations";
+  for (const c of list) {
+    const line = document.createElement("div");
+    const loc = [c.filename, c.page_number ? `p.${c.page_number}` : null, c.heading]
+      .filter(Boolean)
+      .join(" - ");
+    const score = typeof c.score === "number" ? ` (score ${c.score.toFixed(2)})` : "";
+    line.textContent = `[${c.n}] ${loc}${score}`;
+    cites.appendChild(line);
   }
-  els.chatLog.scrollTop = els.chatLog.scrollHeight;
+  return cites;
 }
 
 function setStatus(node, text, kind) {
@@ -259,6 +403,8 @@ function setStatus(node, text, kind) {
 }
 
 renderDocs();
+refreshDocs();
+startBackgroundRefresh();
 for (const d of state.docs) {
   if (!isTerminal(d.status)) startPolling(d.id);
 }
