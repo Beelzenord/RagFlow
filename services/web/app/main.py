@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -28,7 +29,20 @@ HTTP_TIMEOUT = float(os.environ.get("WEB_HTTP_TIMEOUT", "120"))
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-app = FastAPI(title="RAG Web UI", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Reuse a single httpx.AsyncClient across all requests so the connection
+    pool to the internal ingestion/query services survives between calls."""
+    app.state.http = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
+    log.info("web service ready (shared http client initialized)")
+    try:
+        yield
+    finally:
+        await app.state.http.aclose()
+
+
+app = FastAPI(title="RAG Web UI", version="0.1.0", lifespan=lifespan)
 
 
 def _auth_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -45,6 +59,7 @@ async def healthz() -> dict[str, str]:
 
 @app.post("/api/upload")
 async def api_upload(
+    request: Request,
     file: UploadFile = File(...),
     user_id: str | None = Form(default=None),
     collection: str | None = Form(default=None),
@@ -57,22 +72,22 @@ async def api_upload(
     if collection:
         data["collection"] = collection
 
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        try:
-            resp = await client.post(
-                f"{INGESTION_URL}/ingest",
-                headers=_auth_headers(),
-                files=files,
-                data=data,
-            )
-        except httpx.HTTPError as exc:
-            raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
-
+    client: httpx.AsyncClient = request.app.state.http
+    try:
+        resp = await client.post(
+            f"{INGESTION_URL}/ingest",
+            headers=_auth_headers(),
+            files=files,
+            data=data,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
 @app.get("/api/documents")
 async def api_documents(
+    request: Request,
     collection: str | None = None,
     user_id: str | None = None,
     limit: int | None = None,
@@ -84,41 +99,41 @@ async def api_documents(
         params["user_id"] = user_id
     if limit is not None:
         params["limit"] = limit
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        try:
-            resp = await client.get(
-                f"{INGESTION_URL}/documents",
-                headers=_auth_headers(),
-                params=params,
-            )
-        except httpx.HTTPError as exc:
-            raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
+    client: httpx.AsyncClient = request.app.state.http
+    try:
+        resp = await client.get(
+            f"{INGESTION_URL}/documents",
+            headers=_auth_headers(),
+            params=params,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
 @app.get("/api/documents/{document_id}")
-async def api_document(document_id: UUID) -> JSONResponse:
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        try:
-            resp = await client.get(
-                f"{INGESTION_URL}/documents/{document_id}",
-                headers=_auth_headers(),
-            )
-        except httpx.HTTPError as exc:
-            raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
+async def api_document(document_id: UUID, request: Request) -> JSONResponse:
+    client: httpx.AsyncClient = request.app.state.http
+    try:
+        resp = await client.get(
+            f"{INGESTION_URL}/documents/{document_id}",
+            headers=_auth_headers(),
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
 @app.delete("/api/documents/{document_id}")
-async def api_document_delete(document_id: UUID) -> JSONResponse:
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        try:
-            resp = await client.delete(
-                f"{INGESTION_URL}/documents/{document_id}",
-                headers=_auth_headers(),
-            )
-        except httpx.HTTPError as exc:
-            raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
+async def api_document_delete(document_id: UUID, request: Request) -> JSONResponse:
+    client: httpx.AsyncClient = request.app.state.http
+    try:
+        resp = await client.delete(
+            f"{INGESTION_URL}/documents/{document_id}",
+            headers=_auth_headers(),
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
@@ -131,31 +146,31 @@ class QueryBody(BaseModel):
 
 
 @app.post("/api/query")
-async def api_query(body: QueryBody) -> JSONResponse:
+async def api_query(body: QueryBody, request: Request) -> JSONResponse:
     payload = body.model_dump(exclude_none=True)
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        try:
-            resp = await client.post(
-                f"{QUERY_URL}/query",
-                headers=_auth_headers({"content-type": "application/json"}),
-                json=payload,
-            )
-        except httpx.HTTPError as exc:
-            raise HTTPException(502, f"query service unreachable: {exc}") from exc
+    client: httpx.AsyncClient = request.app.state.http
+    try:
+        resp = await client.post(
+            f"{QUERY_URL}/query",
+            headers=_auth_headers({"content-type": "application/json"}),
+            json=payload,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"query service unreachable: {exc}") from exc
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
 @app.post("/api/query/stream")
-async def api_query_stream(body: QueryBody) -> StreamingResponse:
+async def api_query_stream(body: QueryBody, request: Request) -> StreamingResponse:
     """Forward NDJSON streaming bytes from the query service to the browser.
 
     No buffering: each chunk from upstream is yielded as-is so tokens reach
     the UI as soon as the LLM produces them.
     """
     payload = body.model_dump(exclude_none=True)
+    client: httpx.AsyncClient = request.app.state.http
 
     async def upstream() -> Any:
-        client = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
         try:
             async with client.stream(
                 "POST",
@@ -181,8 +196,6 @@ async def api_query_stream(body: QueryBody) -> StreamingResponse:
                 + _json_str(f"query service unreachable: {exc}")
                 + "}\n"
             ).encode("utf-8")
-        finally:
-            await client.aclose()
 
     return StreamingResponse(upstream(), media_type="application/x-ndjson")
 

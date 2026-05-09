@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -20,7 +21,23 @@ from rag_shared.settings import settings
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("query")
 
-app = FastAPI(title="RAG Query Service", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Build the embedding + LLM clients once per process and reuse their
+    connection pools across all requests. Saves a TLS handshake (or two) per
+    /query call."""
+    app.state.embedder = EmbeddingClient()
+    app.state.llm = LLMClient()
+    log.info("query service ready (embedder + llm clients initialized)")
+    try:
+        yield
+    finally:
+        await app.state.embedder.aclose()
+        await app.state.llm.aclose()
+
+
+app = FastAPI(title="RAG Query Service", version="0.1.0", lifespan=lifespan)
 
 SYSTEM_PROMPT = (
     "You are a precise document-grounded assistant. Answer ONLY using the provided sources. "
@@ -143,25 +160,22 @@ async def _retrieve_and_format(
 
 
 @app.post("/query", response_model=QueryResponse, dependencies=[Depends(require_service_key)])
-async def query(req: QueryRequest) -> QueryResponse:
-    embedder = EmbeddingClient()
-    llm = LLMClient()
+async def query(req: QueryRequest, request: Request) -> QueryResponse:
+    embedder: EmbeddingClient = request.app.state.embedder
+    llm: LLMClient = request.app.state.llm
+
+    citations, user_msg = await _retrieve_and_format(req, embedder)
+    if user_msg is None:
+        return QueryResponse(answer=NO_HITS_ANSWER, citations=[])
     try:
-        citations, user_msg = await _retrieve_and_format(req, embedder)
-        if user_msg is None:
-            return QueryResponse(answer=NO_HITS_ANSWER, citations=[])
-        try:
-            answer = await llm.complete(SYSTEM_PROMPT, user_msg, max_tokens=800)
-        except Exception as exc:
-            raise HTTPException(502, f"llm call failed: {exc}") from exc
-        return QueryResponse(answer=answer.strip(), citations=citations)
-    finally:
-        await embedder.aclose()
-        await llm.aclose()
+        answer = await llm.complete(SYSTEM_PROMPT, user_msg, max_tokens=800)
+    except Exception as exc:
+        raise HTTPException(502, f"llm call failed: {exc}") from exc
+    return QueryResponse(answer=answer.strip(), citations=citations)
 
 
 @app.post("/query/stream", dependencies=[Depends(require_service_key)])
-async def query_stream(req: QueryRequest) -> StreamingResponse:
+async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse:
     """Same retrieval as /query, but streams the LLM answer as NDJSON.
 
     Wire format (one JSON object per line, application/x-ndjson):
@@ -170,42 +184,42 @@ async def query_stream(req: QueryRequest) -> StreamingResponse:
       {"type":"done"}
       {"type":"error","message":"..."}         # only on failure mid-stream
     """
-    return StreamingResponse(_run_stream(req), media_type="application/x-ndjson")
+    embedder: EmbeddingClient = request.app.state.embedder
+    llm: LLMClient = request.app.state.llm
+    return StreamingResponse(
+        _run_stream(req, embedder, llm), media_type="application/x-ndjson"
+    )
 
 
 def _ndjson(obj: dict[str, Any]) -> bytes:
     return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
 
 
-async def _run_stream(req: QueryRequest) -> AsyncIterator[bytes]:
-    embedder = EmbeddingClient()
-    llm = LLMClient()
+async def _run_stream(
+    req: QueryRequest, embedder: EmbeddingClient, llm: LLMClient
+) -> AsyncIterator[bytes]:
     try:
-        try:
-            citations, user_msg = await _retrieve_and_format(req, embedder)
-        except HTTPException as exc:
-            yield _ndjson({"type": "error", "message": str(exc.detail)})
-            return
+        citations, user_msg = await _retrieve_and_format(req, embedder)
+    except HTTPException as exc:
+        yield _ndjson({"type": "error", "message": str(exc.detail)})
+        return
 
-        yield _ndjson(
-            {"type": "citations", "data": [c.model_dump() for c in citations]}
-        )
+    yield _ndjson(
+        {"type": "citations", "data": [c.model_dump() for c in citations]}
+    )
 
-        if user_msg is None:
-            yield _ndjson({"type": "delta", "text": NO_HITS_ANSWER})
-            yield _ndjson({"type": "done"})
-            return
-
-        try:
-            async for chunk in llm.stream(SYSTEM_PROMPT, user_msg, max_tokens=800):
-                if chunk:
-                    yield _ndjson({"type": "delta", "text": chunk})
-        except Exception as exc:  # noqa: BLE001
-            log.exception("llm stream failed")
-            yield _ndjson({"type": "error", "message": f"llm call failed: {exc}"})
-            return
-
+    if user_msg is None:
+        yield _ndjson({"type": "delta", "text": NO_HITS_ANSWER})
         yield _ndjson({"type": "done"})
-    finally:
-        await embedder.aclose()
-        await llm.aclose()
+        return
+
+    try:
+        async for chunk in llm.stream(SYSTEM_PROMPT, user_msg, max_tokens=800):
+            if chunk:
+                yield _ndjson({"type": "delta", "text": chunk})
+    except Exception as exc:  # noqa: BLE001
+        log.exception("llm stream failed")
+        yield _ndjson({"type": "error", "message": f"llm call failed: {exc}"})
+        return
+
+    yield _ndjson({"type": "done"})
