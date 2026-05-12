@@ -4,6 +4,7 @@
 // empty list before the first /api/documents response lands.
 
 const STORAGE_KEY = "rag.docs.v1";
+const SHOW_SOURCES_KEY = "rag.showSources.v1";
 const REFRESH_MS = 5000;
 const POLL_MS = 2000;
 
@@ -12,6 +13,7 @@ const state = {
   pollers: new Map(),
   refreshHandle: null,
   pendingDeletes: new Set(),
+  lastUploadId: null,
 };
 
 const els = {
@@ -20,9 +22,12 @@ const els = {
   collectionInput: document.getElementById("collection-input"),
   uploadBtn: document.getElementById("upload-btn"),
   uploadStatus: document.getElementById("upload-status"),
+  uploadProgress: document.getElementById("upload-progress"),
+  uploadBar: document.getElementById("upload-bar"),
   docsList: document.getElementById("docs-list"),
   docsEmpty: document.getElementById("docs-empty"),
   scopeSelect: document.getElementById("scope-select"),
+  showSources: document.getElementById("show-sources"),
   chatLog: document.getElementById("chat-log"),
   chatForm: document.getElementById("chat-form"),
   questionInput: document.getElementById("question-input"),
@@ -221,6 +226,16 @@ function startPolling(docId) {
       if (isTerminal(data.status)) {
         clearInterval(state.pollers.get(docId));
         state.pollers.delete(docId);
+        if (state.lastUploadId === docId) {
+          if (data.status === "completed") {
+            const n = typeof data.chunk_count === "number" ? data.chunk_count : 0;
+            setStatus(els.uploadStatus, `Done - ${n} chunks indexed`, "ok");
+          } else {
+            const reason = data.error_message || "see document row";
+            setStatus(els.uploadStatus, `Failed: ${reason}`, "error");
+          }
+          state.lastUploadId = null;
+        }
       }
     } catch (err) {
       console.warn("poll failed for", docId, err);
@@ -252,6 +267,71 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
+function loadShowSources() {
+  try {
+    return localStorage.getItem(SHOW_SOURCES_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function saveShowSources(on) {
+  try {
+    localStorage.setItem(SHOW_SOURCES_KEY, on ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
+function applyShowSources(on) {
+  els.chatLog.classList.toggle("hide-citations", !on);
+}
+
+(function initShowSources() {
+  const on = loadShowSources();
+  els.showSources.checked = on;
+  applyShowSources(on);
+  els.showSources.addEventListener("change", () => {
+    const isOn = els.showSources.checked;
+    applyShowSources(isOn);
+    saveShowSources(isOn);
+  });
+})();
+
+function setProgress(fraction) {
+  const pct = Math.max(0, Math.min(1, fraction)) * 100;
+  els.uploadBar.style.width = `${pct.toFixed(1)}%`;
+}
+
+function showProgress(visible) {
+  if (visible) {
+    els.uploadProgress.hidden = false;
+    els.uploadProgress.setAttribute("aria-hidden", "false");
+  } else {
+    els.uploadProgress.hidden = true;
+    els.uploadProgress.setAttribute("aria-hidden", "true");
+  }
+}
+
+function uploadWithProgress(formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload");
+    xhr.responseType = "text";
+    xhr.upload.onprogress = (evt) => {
+      if (evt.lengthComputable) onProgress(evt.loaded, evt.total);
+    };
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText || "{}"); } catch { /* ignore */ }
+      resolve({ status: xhr.status, body });
+    };
+    xhr.onerror = () => reject(new Error("network error"));
+    xhr.onabort = () => reject(new Error("aborted"));
+    xhr.send(formData);
+  });
+}
+
 els.uploadForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const file = els.fileInput.files[0];
@@ -263,26 +343,43 @@ els.uploadForm.addEventListener("submit", async (e) => {
   if (collection) fd.append("collection", collection);
 
   els.uploadBtn.disabled = true;
-  setStatus(els.uploadStatus, "Uploading...", "");
+  setProgress(0);
+  showProgress(true);
+  setStatus(els.uploadStatus, "Uploading 0%...", "");
+
   try {
-    const resp = await fetch("/api/upload", { method: "POST", body: fd });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
-      const msg = data?.detail || data?.error || `HTTP ${resp.status}`;
+    const { status, body } = await uploadWithProgress(fd, (loaded, total) => {
+      const frac = total ? loaded / total : 0;
+      setProgress(frac);
+      const pct = Math.round(frac * 100);
+      if (pct < 100) {
+        setStatus(els.uploadStatus, `Uploading ${pct}%...`, "");
+      } else {
+        setStatus(els.uploadStatus, "Uploaded, server processing...", "");
+      }
+    });
+
+    if (status < 200 || status >= 300) {
+      const msg = body?.detail || body?.error || `HTTP ${status}`;
       throw new Error(msg);
     }
-    setStatus(els.uploadStatus, `Accepted. document_id=${data.document_id}`, "ok");
+
+    setProgress(1);
+    showProgress(false);
+    setStatus(els.uploadStatus, "Uploaded, server processing...", "");
+    state.lastUploadId = body.document_id;
     state.docs.unshift({
-      id: data.document_id,
-      status: data.status || "processing",
+      id: body.document_id,
+      status: body.status || "processing",
       filename: file.name,
       collection: collection || null,
     });
     saveDocsCache();
     renderDocs();
-    startPolling(data.document_id);
+    startPolling(body.document_id);
     els.uploadForm.reset();
   } catch (err) {
+    showProgress(false);
     setStatus(els.uploadStatus, `Upload failed: ${err.message}`, "error");
   } finally {
     els.uploadBtn.disabled = false;
@@ -302,7 +399,10 @@ els.chatForm.addEventListener("submit", async (e) => {
   const bubble = appendMessage("bot", "");
   const answerNode = document.createElement("div");
   answerNode.className = "answer";
-  answerNode.textContent = "...";
+  const spinner = document.createElement("span");
+  spinner.className = "spinner";
+  spinner.setAttribute("aria-label", "thinking");
+  answerNode.appendChild(spinner);
   bubble.appendChild(answerNode);
   let firstDeltaSeen = false;
   let citationsNode = null;

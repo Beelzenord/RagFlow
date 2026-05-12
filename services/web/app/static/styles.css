@@ -98,6 +98,21 @@ html, body {
   gap: 8px;
 }
 
+.field.inline.checkbox {
+  margin-bottom: 0;
+}
+
+.field.inline.checkbox input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+}
+
+.field.inline.checkbox span {
+  cursor: pointer;
+  user-select: none;
+}
+
 .field span {
   color: var(--muted);
   font-size: 12px;
@@ -145,6 +160,23 @@ button:disabled {
 
 .status.error { color: var(--err); }
 .status.ok    { color: var(--ok); }
+
+.progress {
+  margin-top: 10px;
+  height: 6px;
+  background: var(--code-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.15s ease-out;
+}
 
 .muted { color: var(--muted); }
 
@@ -246,6 +278,10 @@ button:disabled {
 
 .chat-controls {
   margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
 .chat-log {
@@ -293,6 +329,25 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.chat-log.hide-citations .citations {
+  display: none;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--panel-border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  display: inline-block;
+  animation: rag-spin 0.7s linear infinite;
+  vertical-align: -2px;
+}
+
+@keyframes rag-spin {
+  to { transform: rotate(360deg); }
 }
 
 .chat-form {

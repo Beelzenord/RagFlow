@@ -25,6 +25,9 @@
           <input type="text" id="collection-input" placeholder="e.g. handbook" />
         </label>
         <button type="submit" id="upload-btn">Upload</button>
+        <div class="progress" id="upload-progress" hidden aria-hidden="true">
+          <div class="progress-bar" id="upload-bar"></div>
+        </div>
         <p class="status" id="upload-status" aria-live="polite"></p>
       </form>
     </section>
@@ -43,6 +46,10 @@
           <select id="scope-select">
             <option value="">All completed documents</option>
           </select>
+        </label>
+        <label class="field inline checkbox">
+          <input type="checkbox" id="show-sources" checked />
+          <span>Show sources</span>
         </label>
       </div>
       <div id="chat-log" class="chat-log" aria-live="polite"></div>
