@@ -23,6 +23,9 @@ const state = {
   mediaRecorder: null,
   recordChunks: [],
   lang: "en",
+  queue: [],
+  queueBusy: false,
+  nextQid: 1,
 };
 
 const els = {
@@ -46,6 +49,10 @@ const els = {
   voiceControls: document.getElementById("voice-controls"),
   micBtn: document.getElementById("mic-btn"),
   voiceStatus: document.getElementById("voice-status"),
+  queuePanel: document.getElementById("queue-panel"),
+  queueList: document.getElementById("queue-list"),
+  queueSummary: document.getElementById("queue-summary"),
+  queueClearBtn: document.getElementById("queue-clear-btn"),
 };
 
 function loadDocsCache() {
@@ -249,6 +256,17 @@ function startPolling(docId) {
             setStatus(els.uploadStatus, `Failed: ${reason}`, "error");
           }
           state.lastUploadId = null;
+        }
+        const qEntry = state.queue.find((q) => q.docId === docId);
+        if (qEntry && (qEntry.status === "processing" || qEntry.status === "uploading")) {
+          qEntry.status = data.status;
+          if (typeof data.chunk_count === "number") qEntry.chunkCount = data.chunk_count;
+          if (data.status === "failed") qEntry.error = data.error_message || "processing failed";
+          renderQueue();
+          if (state.queueBusy) {
+            state.queueBusy = false;
+            pumpQueue();
+          }
         }
       }
     } catch (err) {
@@ -651,58 +669,222 @@ function uploadWithProgress(formData, onProgress) {
   });
 }
 
-els.uploadForm.addEventListener("submit", async (e) => {
+els.uploadForm.addEventListener("submit", (e) => {
   e.preventDefault();
-  const file = els.fileInput.files[0];
-  if (!file) return;
-  const collection = els.collectionInput.value.trim();
+  const files = Array.from(els.fileInput.files || []);
+  if (!files.length) return;
+  const collection = els.collectionInput.value.trim() || null;
+
+  for (const file of files) {
+    state.queue.push({
+      qid: state.nextQid++,
+      file,
+      filename: file.name,
+      size: file.size,
+      collection,
+      status: "queued",
+      uploadFrac: 0,
+      docId: null,
+      chunkCount: null,
+      error: null,
+    });
+  }
+
+  showProgress(false);
+  setStatus(
+    els.uploadStatus,
+    `${files.length} file${files.length === 1 ? "" : "s"} queued`,
+    "",
+  );
+  els.uploadForm.reset();
+  renderQueue();
+  pumpQueue();
+});
+
+async function pumpQueue() {
+  if (state.queueBusy) return;
+  const next = state.queue.find((q) => q.status === "queued");
+  if (!next) {
+    renderQueue();
+    return;
+  }
+  state.queueBusy = true;
+  next.status = "uploading";
+  next.uploadFrac = 0;
+  renderQueue();
 
   const fd = new FormData();
-  fd.append("file", file);
-  if (collection) fd.append("collection", collection);
-
-  els.uploadBtn.disabled = true;
-  setProgress(0);
-  showProgress(true);
-  setStatus(els.uploadStatus, "Uploading 0%...", "");
+  fd.append("file", next.file);
+  if (next.collection) fd.append("collection", next.collection);
 
   try {
     const { status, body } = await uploadWithProgress(fd, (loaded, total) => {
-      const frac = total ? loaded / total : 0;
-      setProgress(frac);
-      const pct = Math.round(frac * 100);
-      if (pct < 100) {
-        setStatus(els.uploadStatus, `Uploading ${pct}%...`, "");
-      } else {
-        setStatus(els.uploadStatus, "Uploaded, server processing...", "");
-      }
+      next.uploadFrac = total ? loaded / total : 0;
+      updateQueueRowProgress(next.qid, next.uploadFrac);
     });
-
     if (status < 200 || status >= 300) {
       const msg = body?.detail || body?.error || `HTTP ${status}`;
       throw new Error(msg);
     }
-
-    setProgress(1);
-    showProgress(false);
-    setStatus(els.uploadStatus, "Uploaded, server processing...", "");
+    next.uploadFrac = 1;
+    next.docId = body.document_id;
+    next.status = "processing";
     state.lastUploadId = body.document_id;
     state.docs.unshift({
       id: body.document_id,
       status: body.status || "processing",
-      filename: file.name,
-      collection: collection || null,
+      filename: next.filename,
+      collection: next.collection,
     });
     saveDocsCache();
     renderDocs();
+    renderQueue();
+    // Hand off to per-doc poller; queue advances when poller observes a
+    // terminal status (see startPolling's terminal branch).
     startPolling(body.document_id);
-    els.uploadForm.reset();
   } catch (err) {
-    showProgress(false);
-    setStatus(els.uploadStatus, `Upload failed: ${err.message}`, "error");
-  } finally {
-    els.uploadBtn.disabled = false;
+    next.status = "failed";
+    next.error = err.message || String(err);
+    state.queueBusy = false;
+    renderQueue();
+    pumpQueue();
   }
+}
+
+function updateQueueRowProgress(qid, frac) {
+  const bar = els.queueList.querySelector(
+    `li[data-qid="${qid}"] .progress-bar`,
+  );
+  if (bar) bar.style.width = `${(Math.max(0, Math.min(1, frac)) * 100).toFixed(1)}%`;
+}
+
+function renderQueue() {
+  const items = state.queue;
+  if (!items.length) {
+    els.queuePanel.hidden = true;
+    els.queueList.innerHTML = "";
+    els.queueSummary.textContent = "";
+    return;
+  }
+  els.queuePanel.hidden = false;
+
+  let queued = 0, uploading = 0, processing = 0, completed = 0, failed = 0;
+  for (const it of items) {
+    if (it.status === "queued") queued++;
+    else if (it.status === "uploading") uploading++;
+    else if (it.status === "processing") processing++;
+    else if (it.status === "completed") completed++;
+    else if (it.status === "failed") failed++;
+  }
+  const parts = [];
+  if (uploading) parts.push(`${uploading} uploading`);
+  if (processing) parts.push(`${processing} processing`);
+  if (queued) parts.push(`${queued} queued`);
+  if (completed) parts.push(`${completed} completed`);
+  if (failed) parts.push(`${failed} failed`);
+  els.queueSummary.textContent = parts.join(" - ");
+
+  els.queueList.innerHTML = "";
+  for (const it of items) {
+    const li = document.createElement("li");
+    li.className = "queue-item";
+    li.dataset.qid = String(it.qid);
+
+    const row = document.createElement("div");
+    row.className = "queue-row";
+
+    const name = document.createElement("div");
+    name.className = "queue-name";
+    name.textContent = it.filename;
+
+    const actions = document.createElement("div");
+    actions.className = "queue-actions";
+
+    const badge = document.createElement("span");
+    badge.className = `badge ${it.status}`;
+    badge.textContent = it.status;
+    actions.appendChild(badge);
+
+    if (it.status === "queued") {
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "btn-secondary";
+      rm.textContent = "Remove";
+      rm.addEventListener("click", () => {
+        const idx = state.queue.findIndex((q) => q.qid === it.qid);
+        if (idx !== -1 && state.queue[idx].status === "queued") {
+          state.queue.splice(idx, 1);
+          renderQueue();
+        }
+      });
+      actions.appendChild(rm);
+    }
+
+    row.append(name, actions);
+    li.appendChild(row);
+
+    const meta = document.createElement("div");
+    meta.className = "queue-meta";
+    if (typeof it.size === "number") {
+      const sz = document.createElement("span");
+      sz.textContent = formatBytes(it.size);
+      meta.appendChild(sz);
+    }
+    if (it.collection) {
+      const c = document.createElement("span");
+      c.textContent = `collection: ${it.collection}`;
+      meta.appendChild(c);
+    }
+    if (it.status === "completed" && typeof it.chunkCount === "number") {
+      const cc = document.createElement("span");
+      cc.textContent = `${it.chunkCount} chunks`;
+      meta.appendChild(cc);
+    }
+    if (meta.childNodes.length) li.appendChild(meta);
+
+    if (it.status === "uploading") {
+      const prog = document.createElement("div");
+      prog.className = "progress";
+      const bar = document.createElement("div");
+      bar.className = "progress-bar";
+      bar.style.width = `${(it.uploadFrac * 100).toFixed(1)}%`;
+      prog.appendChild(bar);
+      li.appendChild(prog);
+    }
+
+    if (it.status === "failed" && it.error) {
+      const err = document.createElement("div");
+      err.className = "queue-error";
+      err.textContent = it.error;
+      li.appendChild(err);
+    }
+
+    els.queueList.appendChild(li);
+  }
+
+  const anyFinished = items.some(
+    (q) => q.status === "completed" || q.status === "failed",
+  );
+  els.queueClearBtn.disabled = !anyFinished;
+}
+
+function formatBytes(n) {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+els.queueClearBtn.addEventListener("click", () => {
+  state.queue = state.queue.filter(
+    (q) => q.status !== "completed" && q.status !== "failed",
+  );
+  renderQueue();
 });
 
 async function runChat(question, { voice = false } = {}) {

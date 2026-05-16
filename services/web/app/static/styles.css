@@ -48,6 +48,7 @@ html, body {
   grid-template-columns: 1fr 1fr;
   grid-template-areas:
     "upload chat"
+    "queue  chat"
     "docs   chat";
   gap: 16px;
   padding: 16px;
@@ -56,6 +57,7 @@ html, body {
 }
 
 #upload-panel { grid-area: upload; }
+#queue-panel  { grid-area: queue; }
 #docs-panel   { grid-area: docs; }
 #chat-panel   { grid-area: chat; }
 
@@ -64,6 +66,7 @@ html, body {
     grid-template-columns: 1fr;
     grid-template-areas:
       "upload"
+      "queue"
       "docs"
       "chat";
   }
@@ -387,3 +390,88 @@ button:disabled {
 }
 
 .chat-form textarea { flex: 1; }
+
+.btn-secondary {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--panel-border);
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.queue-summary {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+  min-height: 16px;
+}
+
+.queue {
+  list-style: none;
+  margin: 0 0 12px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.queue-item {
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.queue-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.queue-name {
+  font-weight: 600;
+  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.queue-item .progress {
+  margin-top: 0;
+}
+
+.queue-meta {
+  color: var(--muted);
+  font-size: 12px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.queue-error {
+  color: var(--err);
+  font-size: 12px;
+  white-space: pre-wrap;
+}

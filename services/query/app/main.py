@@ -40,20 +40,28 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="RAG Query Service", version="0.1.0", lifespan=lifespan)
 
 SYSTEM_PROMPT = (
-    "You are a precise document-grounded assistant. Answer ONLY using the provided sources. "
-    "Cite sources inline as [#] using the source numbers shown. If the answer is not in the "
-    "sources, say so plainly."
+    "You are a warm, helpful assistant that answers questions from the user's documents. "
+    "Use a friendly, conversational tone - clear and human, never robotic - but stay focused "
+    "and avoid filler. Answer ONLY using the provided sources; never invent facts or rely on "
+    "outside knowledge. Cite sources inline as [#] using the source numbers shown. If the "
+    "answer is not in the sources, say so honestly and kindly, and suggest what the user "
+    "could try next (rephrasing the question, or sharing a document that covers it)."
 )
 
 SYSTEM_PROMPT_VOICE = (
-    "You are a precise document-grounded voice assistant. Answer ONLY using the provided "
-    "sources. Speak naturally as if explaining to a colleague. Do NOT include bracketed "
-    "citation markers like [1], [2] in your spoken text; the UI shows sources separately. "
-    "Keep answers concise and easy to follow aloud. If the answer is not in the sources, "
-    "say so plainly in one sentence."
+    "You are a warm, helpful voice assistant that answers from the user's documents. Speak "
+    "naturally and kindly, the way you would help a colleague - clear and easy to follow "
+    "aloud, but never invent facts. Answer ONLY using the provided sources. Do NOT include "
+    "bracketed citation markers like [1], [2] in your spoken text; the UI shows sources "
+    "separately. Keep answers concise. If the answer is not in the sources, say so honestly "
+    "in a sentence or two and gently suggest what the user could try next."
 )
 
-NO_HITS_ANSWER = "I couldn't find anything relevant in the indexed documents."
+NO_HITS_ANSWER = (
+    "I looked through the indexed documents but couldn't find anything relevant to that "
+    "question. Try rephrasing it, or upload a document that covers this topic and I'll take "
+    "another look."
+)
 
 
 class QueryRequest(BaseModel):
@@ -179,7 +187,8 @@ async def _retrieve_and_format(
     user_msg = (
         f"Question: {req.question}\n\n"
         "Sources:\n" + "\n\n".join(blocks) + "\n\n"
-        "Answer the question using only these sources. Cite with [#]."
+        "Please answer the question using only these sources, in a warm and conversational "
+        "tone. Cite with [#]."
     )
     return citations, user_msg
 

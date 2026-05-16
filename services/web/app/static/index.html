@@ -17,19 +17,26 @@
       <h2>1. Upload</h2>
       <form id="upload-form">
         <label class="field">
-          <span>File</span>
-          <input type="file" id="file-input" required />
+          <span>Files</span>
+          <input type="file" id="file-input" multiple required />
         </label>
         <label class="field">
           <span>Collection (optional)</span>
           <input type="text" id="collection-input" placeholder="e.g. handbook" />
         </label>
-        <button type="submit" id="upload-btn">Upload</button>
+        <button type="submit" id="upload-btn">Add to queue</button>
         <div class="progress" id="upload-progress" hidden aria-hidden="true">
           <div class="progress-bar" id="upload-bar"></div>
         </div>
         <p class="status" id="upload-status" aria-live="polite"></p>
       </form>
+    </section>
+
+    <section class="panel" id="queue-panel" hidden>
+      <h2>Upload queue</h2>
+      <div class="queue-summary" id="queue-summary"></div>
+      <ul id="queue-list" class="queue"></ul>
+      <button type="button" id="queue-clear-btn" class="btn-secondary">Clear finished</button>
     </section>
 
     <section class="panel" id="docs-panel">
