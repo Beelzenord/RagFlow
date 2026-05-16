@@ -45,6 +45,14 @@ SYSTEM_PROMPT = (
     "sources, say so plainly."
 )
 
+SYSTEM_PROMPT_VOICE = (
+    "You are a precise document-grounded voice assistant. Answer ONLY using the provided "
+    "sources. Speak naturally as if explaining to a colleague. Do NOT include bracketed "
+    "citation markers like [1], [2] in your spoken text; the UI shows sources separately. "
+    "Keep answers concise and easy to follow aloud. If the answer is not in the sources, "
+    "say so plainly in one sentence."
+)
+
 NO_HITS_ANSWER = "I couldn't find anything relevant in the indexed documents."
 
 
@@ -54,6 +62,23 @@ class QueryRequest(BaseModel):
     collection: str | None = None
     user_id: str | None = None
     top_k: int | None = Field(default=None, ge=1, le=50)
+    voice: bool | None = False
+    lang: str | None = None
+
+
+# Human-readable names so we can ask the model to answer in that language.
+LANG_NAMES: dict[str, str] = {
+    "en": "English",
+    "sv": "Swedish",
+}
+
+
+def _system_prompt_for(req: QueryRequest) -> str:
+    base = SYSTEM_PROMPT_VOICE if req.voice else SYSTEM_PROMPT
+    name = LANG_NAMES.get((req.lang or "").lower())
+    if name:
+        return f"{base} Answer in {name}."
+    return base
 
 
 class Citation(BaseModel):
@@ -168,7 +193,7 @@ async def query(req: QueryRequest, request: Request) -> QueryResponse:
     if user_msg is None:
         return QueryResponse(answer=NO_HITS_ANSWER, citations=[])
     try:
-        answer = await llm.complete(SYSTEM_PROMPT, user_msg, max_tokens=800)
+        answer = await llm.complete(_system_prompt_for(req), user_msg, max_tokens=800)
     except Exception as exc:
         raise HTTPException(502, f"llm call failed: {exc}") from exc
     return QueryResponse(answer=answer.strip(), citations=citations)
@@ -214,7 +239,7 @@ async def _run_stream(
         return
 
     try:
-        async for chunk in llm.stream(SYSTEM_PROMPT, user_msg, max_tokens=800):
+        async for chunk in llm.stream(_system_prompt_for(req), user_msg, max_tokens=800):
             if chunk:
                 yield _ndjson({"type": "delta", "text": chunk})
     except Exception as exc:  # noqa: BLE001

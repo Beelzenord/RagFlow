@@ -27,6 +27,24 @@ QUERY_URL = os.environ.get("QUERY_URL", "http://query:8002").rstrip("/")
 SERVICE_API_KEY = os.environ.get("SERVICE_API_KEY", "")
 HTTP_TIMEOUT = float(os.environ.get("WEB_HTTP_TIMEOUT", "120"))
 
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+ELEVENLABS_VOICE_ID_SV = os.environ.get("ELEVENLABS_VOICE_ID_SV", "kPdGSxhZAqy4bmPAf9iJ")
+ELEVENLABS_TTS_MODEL = os.environ.get("ELEVENLABS_TTS_MODEL", "eleven_multilingual_v2")
+ELEVENLABS_STT_MODEL = os.environ.get("ELEVENLABS_STT_MODEL", "scribe_v1")
+ELEVENLABS_BASE_URL = os.environ.get("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io").rstrip("/")
+
+ELEVENLABS_VOICES: dict[str, str] = {
+    "en": ELEVENLABS_VOICE_ID,
+    "sv": ELEVENLABS_VOICE_ID_SV,
+}
+
+
+def _voice_for_lang(lang: str | None) -> str:
+    key = (lang or "").lower()
+    return ELEVENLABS_VOICES.get(key) or ELEVENLABS_VOICE_ID
+
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -143,6 +161,8 @@ class QueryBody(BaseModel):
     collection: str | None = None
     user_id: str | None = None
     top_k: int | None = Field(default=None, ge=1, le=50)
+    voice: bool | None = None
+    lang: str | None = None
 
 
 @app.post("/api/query")
@@ -198,6 +218,100 @@ async def api_query_stream(body: QueryBody, request: Request) -> StreamingRespon
             ).encode("utf-8")
 
     return StreamingResponse(upstream(), media_type="application/x-ndjson")
+
+
+def _elevenlabs_unavailable() -> HTTPException:
+    return HTTPException(503, "voice features require ELEVENLABS_API_KEY")
+
+
+@app.post("/api/voice/transcribe")
+async def api_voice_transcribe(
+    request: Request,
+    file: UploadFile = File(...),
+    lang: str | None = Form(default=None),
+) -> JSONResponse:
+    """Forward an audio blob to ElevenLabs Scribe and return the transcript."""
+    if not ELEVENLABS_API_KEY:
+        raise _elevenlabs_unavailable()
+    content = await file.read()
+    files = {
+        "file": (
+            file.filename or "audio.webm",
+            content,
+            file.content_type or "audio/webm",
+        ),
+    }
+    data: dict[str, str] = {"model_id": ELEVENLABS_STT_MODEL}
+    if lang and lang.lower() in ELEVENLABS_VOICES:
+        data["language_code"] = lang.lower()
+    client: httpx.AsyncClient = request.app.state.http
+    try:
+        resp = await client.post(
+            f"{ELEVENLABS_BASE_URL}/v1/speech-to-text",
+            headers={"xi-api-key": ELEVENLABS_API_KEY},
+            files=files,
+            data=data,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"elevenlabs unreachable: {exc}") from exc
+
+    if resp.status_code >= 400:
+        return JSONResponse(
+            status_code=resp.status_code,
+            content={"error": resp.text[:500] or f"HTTP {resp.status_code}"},
+        )
+    body = _safe_json(resp)
+    text = ""
+    if isinstance(body, dict):
+        text = body.get("text") or body.get("transcript") or ""
+    return JSONResponse({"text": text})
+
+
+class TTSBody(BaseModel):
+    text: str = Field(..., min_length=1, max_length=5000)
+    voice_id: str | None = None
+    lang: str | None = None
+
+
+@app.post("/api/voice/tts")
+async def api_voice_tts(body: TTSBody, request: Request) -> StreamingResponse:
+    """Stream audio/mpeg bytes from ElevenLabs TTS straight to the browser."""
+    if not ELEVENLABS_API_KEY:
+        raise _elevenlabs_unavailable()
+    voice_id = body.voice_id or _voice_for_lang(body.lang)
+    payload = {
+        "text": body.text,
+        "model_id": ELEVENLABS_TTS_MODEL,
+    }
+    client: httpx.AsyncClient = request.app.state.http
+
+    async def upstream() -> Any:
+        try:
+            async with client.stream(
+                "POST",
+                f"{ELEVENLABS_BASE_URL}/v1/text-to-speech/{voice_id}/stream",
+                headers={
+                    "xi-api-key": ELEVENLABS_API_KEY,
+                    "content-type": "application/json",
+                    "accept": "audio/mpeg",
+                },
+                json=payload,
+            ) as resp:
+                if resp.status_code >= 400:
+                    body_bytes = await resp.aread()
+                    log.warning(
+                        "elevenlabs tts %s: %s",
+                        resp.status_code,
+                        body_bytes.decode(errors="replace")[:300],
+                    )
+                    return
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        yield chunk
+        except httpx.HTTPError as exc:
+            log.warning("elevenlabs tts unreachable: %s", exc)
+
+    return StreamingResponse(upstream(), media_type="audio/mpeg")
 
 
 def _json_str(s: str) -> str:

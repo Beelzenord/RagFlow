@@ -47,6 +47,20 @@
             <option value="">All completed documents</option>
           </select>
         </label>
+        <label class="field inline">
+          <span>Mode</span>
+          <select id="mode-select">
+            <option value="text" selected>Text</option>
+            <option value="voice">Voice</option>
+          </select>
+        </label>
+        <label class="field inline">
+          <span>Language</span>
+          <select id="lang-select">
+            <option value="en" selected>English</option>
+            <option value="sv">Svenska</option>
+          </select>
+        </label>
         <label class="field inline checkbox">
           <input type="checkbox" id="show-sources" checked />
           <span>Show sources</span>
@@ -57,6 +71,10 @@
         <textarea id="question-input" rows="2" placeholder="Ask a question about the indexed documents..." required></textarea>
         <button type="submit" id="ask-btn">Ask</button>
       </form>
+      <div id="voice-controls" hidden>
+        <button id="mic-btn" type="button">Start recording</button>
+        <p id="voice-status" class="status" aria-live="polite"></p>
+      </div>
     </section>
   </main>
 

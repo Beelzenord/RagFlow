@@ -103,6 +103,11 @@ services:
       INGESTION_URL: http://ingestion:8001
       QUERY_URL: http://query:8002
       SERVICE_API_KEY: ${SERVICE_API_KEY}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-21m00Tcm4TlvDq8ikWAM}
+      ELEVENLABS_VOICE_ID_SV: ${ELEVENLABS_VOICE_ID_SV:-kPdGSxhZAqy4bmPAf9iJ}
+      ELEVENLABS_TTS_MODEL: ${ELEVENLABS_TTS_MODEL:-eleven_multilingual_v2}
+      ELEVENLABS_STT_MODEL: ${ELEVENLABS_STT_MODEL:-scribe_v1}
     ports:
       - "${WEB_PORT:-8080}:8080"
     depends_on:
