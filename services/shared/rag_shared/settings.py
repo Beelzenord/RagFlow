@@ -33,12 +33,17 @@ class Settings(BaseSettings):
     storage_dir: str = "/data/storage"
     max_upload_mb: int = 50
     allowed_mime_types: str = "application/pdf,image/jpeg,image/jpg,image/png"
-    chunk_size: int = 1024
-    chunk_overlap: int = 128
+    chunk_size: int = 512
+    chunk_overlap: int = 64
 
     # Query
     retrieval_top_k: int = 6
-    retrieval_min_score: float = 0.0
+    retrieval_min_score: float = 0.25
+    retrieval_pool_size: int = 30
+
+    # Reranker (local cross-encoder)
+    reranker_enabled: bool = True
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
 
     # Auth
     service_api_key: str = ""

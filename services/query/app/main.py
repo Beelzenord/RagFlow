@@ -2,6 +2,7 @@
 already happened during ingestion."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -26,9 +27,24 @@ log = logging.getLogger("query")
 async def lifespan(app: FastAPI):
     """Build the embedding + LLM clients once per process and reuse their
     connection pools across all requests. Saves a TLS handshake (or two) per
-    /query call."""
+    /query call. The reranker model is also loaded once (heavyweight: ~600 MB
+    on disk, ~1-2 GB resident) and held on app.state; if it can't be loaded
+    (model missing, torch not installed) we degrade cleanly to ANN-only."""
     app.state.embedder = EmbeddingClient()
     app.state.llm = LLMClient()
+    app.state.reranker = None
+    if settings.reranker_enabled:
+        try:
+            from .reranker import Reranker
+
+            app.state.reranker = Reranker()
+            log.info("reranker ready (%s)", settings.reranker_model)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "reranker disabled: failed to load %s: %s",
+                settings.reranker_model,
+                exc,
+            )
     log.info("query service ready (embedder + llm clients initialized)")
     try:
         yield
@@ -124,12 +140,20 @@ def _build_filter(req: QueryRequest) -> tuple[str, dict[str, Any]]:
 
 
 async def _retrieve_and_format(
-    req: QueryRequest, embedder: EmbeddingClient
+    req: QueryRequest,
+    embedder: EmbeddingClient,
+    reranker: Any | None = None,
 ) -> tuple[list[Citation], str | None]:
-    """Run embedding + vector search and build the LLM user prompt.
+    """Run embedding + vector search, optionally rerank, and build the LLM
+    user prompt.
 
     Returns (citations, user_prompt). user_prompt is None when no rows match,
     in which case the caller should short-circuit with NO_HITS_ANSWER.
+
+    When a reranker is supplied, we pull a larger ANN pool (retrieval_pool_size)
+    and let the cross-encoder pick the final top_k. The min_score gate is
+    always applied to the **vector cosine** score (cross-encoder scores are
+    unbounded and not comparable).
     """
     try:
         q_vec = await embedder.embed_one(req.question)
@@ -137,10 +161,10 @@ async def _retrieve_and_format(
         raise HTTPException(502, f"embedding failed: {exc}") from exc
 
     top_k = req.top_k or settings.retrieval_top_k
+    pool = max(top_k, settings.retrieval_pool_size) if reranker else top_k
     where, params = _build_filter(req)
     params["q"] = str(q_vec)
-    params["k"] = top_k
-    params["min_score"] = settings.retrieval_min_score
+    params["k"] = pool
 
     sql = f"""
         SELECT  c.id            AS chunk_id,
@@ -160,9 +184,20 @@ async def _retrieve_and_format(
     async with session_scope() as session:
         rows = (await session.execute(text(sql), params)).mappings().all()
 
+    # Gate on vector cosine before reranking so obvious junk never enters the
+    # cross-encoder (saves time) and never reaches the LLM (saves accuracy).
     rows = [r for r in rows if r["score"] >= settings.retrieval_min_score]
     if not rows:
         return [], None
+
+    if reranker and len(rows) > top_k:
+        # CrossEncoder.predict is CPU-bound; offload so we don't stall the
+        # event loop for other concurrent requests.
+        rows = await asyncio.to_thread(
+            reranker.rerank, req.question, list(rows), top_k
+        )
+    else:
+        rows = list(rows[:top_k])
 
     blocks: list[str] = []
     citations: list[Citation] = []
@@ -197,8 +232,9 @@ async def _retrieve_and_format(
 async def query(req: QueryRequest, request: Request) -> QueryResponse:
     embedder: EmbeddingClient = request.app.state.embedder
     llm: LLMClient = request.app.state.llm
+    reranker = request.app.state.reranker
 
-    citations, user_msg = await _retrieve_and_format(req, embedder)
+    citations, user_msg = await _retrieve_and_format(req, embedder, reranker)
     if user_msg is None:
         return QueryResponse(answer=NO_HITS_ANSWER, citations=[])
     try:
@@ -220,8 +256,10 @@ async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse
     """
     embedder: EmbeddingClient = request.app.state.embedder
     llm: LLMClient = request.app.state.llm
+    reranker = request.app.state.reranker
     return StreamingResponse(
-        _run_stream(req, embedder, llm), media_type="application/x-ndjson"
+        _run_stream(req, embedder, llm, reranker),
+        media_type="application/x-ndjson",
     )
 
 
@@ -230,10 +268,13 @@ def _ndjson(obj: dict[str, Any]) -> bytes:
 
 
 async def _run_stream(
-    req: QueryRequest, embedder: EmbeddingClient, llm: LLMClient
+    req: QueryRequest,
+    embedder: EmbeddingClient,
+    llm: LLMClient,
+    reranker: Any | None = None,
 ) -> AsyncIterator[bytes]:
     try:
-        citations, user_msg = await _retrieve_and_format(req, embedder)
+        citations, user_msg = await _retrieve_and_format(req, embedder, reranker)
     except HTTPException as exc:
         yield _ndjson({"type": "error", "message": str(exc.detail)})
         return

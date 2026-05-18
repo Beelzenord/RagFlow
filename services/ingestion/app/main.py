@@ -179,3 +179,33 @@ async def reprocess(document_id: UUID, background: BackgroundTasks) -> dict[str,
         )
     background.add_task(run_ingestion, str(document_id), storage_path, file_type or "")
     return {"document_id": str(document_id), "status": "processing"}
+
+
+@app.post("/documents/reprocess-all", dependencies=[Depends(require_service_key)])
+async def reprocess_all(background: BackgroundTasks) -> dict[str, Any]:
+    """Re-run the full ingestion pipeline for every document with a stored
+    original. Intended for one-off migrations (e.g. after changing the
+    chunker or the embedding-input format). FastAPI BackgroundTasks runs
+    the queued tasks sequentially after the response returns, which also
+    keeps LlamaParse rate-limit pressure low."""
+    async with session_scope() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT id, storage_path, file_type FROM documents "
+                    "WHERE storage_path <> ''"
+                )
+            )
+        ).all()
+        for r in rows:
+            await session.execute(
+                text(
+                    "UPDATE documents SET status='processing', error_message=NULL "
+                    "WHERE id = :id"
+                ),
+                {"id": str(r[0])},
+            )
+    for r in rows:
+        background.add_task(run_ingestion, str(r[0]), r[1], r[2] or "")
+    log.info("reprocess-all queued %d documents", len(rows))
+    return {"queued": len(rows)}

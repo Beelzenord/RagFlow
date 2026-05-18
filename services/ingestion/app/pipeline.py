@@ -49,10 +49,15 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
     job_id: str | None = None
     embedder: EmbeddingClient | None = None
     try:
-        # 1. Mark processing + open job
+        # 1. Mark processing + open job, and grab the filename for embedding context.
         async with session_scope() as session:
             await _set_doc_status(session, document_id, "processing")
             job_id = await _start_job(session, document_id)
+            row = await session.execute(
+                text("SELECT original_filename FROM documents WHERE id = :id"),
+                {"id": document_id},
+            )
+            original_filename = row.scalar_one_or_none() or ""
 
         # 2. Parse to markdown (network-bound to LlamaCloud)
         markdown = await parse_to_markdown(storage_path, file_type)
@@ -65,12 +70,21 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
         if not chunks:
             raise RuntimeError("Chunker produced no chunks")
 
-        # 4. Embed (batched)
+        # 4. Embed (batched). The embedding input is enriched with filename +
+        # heading so the vector "knows" where the chunk sits; the stored
+        # `content` column stays raw so the LLM prompt is unchanged.
         embedder = EmbeddingClient()
         BATCH = 64
         embeddings: list[list[float]] = []
         for i in range(0, len(chunks), BATCH):
-            batch = [c.content for c in chunks[i : i + BATCH]]
+            batch = [
+                (
+                    f"{original_filename}\n# {c.heading}\n\n{c.content}"
+                    if c.heading
+                    else f"{original_filename}\n\n{c.content}"
+                )
+                for c in chunks[i : i + BATCH]
+            ]
             embeddings.extend(await embedder.embed(batch))
 
         # 5. Persist atomically: wipe old chunks, insert markdown + new chunks
