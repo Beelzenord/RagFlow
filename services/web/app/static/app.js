@@ -1035,6 +1035,30 @@ function setStatus(node, text, kind) {
   node.className = `status ${kind || ""}`.trim();
 }
 
+(function initCollapsiblePanels() {
+  const panels = [
+    { el: document.getElementById("upload-details"), key: "rag.collapse.upload.v1" },
+    { el: document.getElementById("docs-details"), key: "rag.collapse.docs.v1" },
+  ];
+  for (const { el, key } of panels) {
+    if (!el) continue;
+    try {
+      const saved = localStorage.getItem(key);
+      if (saved === "0") el.open = false;
+      else if (saved === "1") el.open = true;
+    } catch {
+      /* ignore */
+    }
+    el.addEventListener("toggle", () => {
+      try {
+        localStorage.setItem(key, el.open ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+    });
+  }
+})();
+
 renderDocs();
 refreshDocs();
 startBackgroundRefresh();

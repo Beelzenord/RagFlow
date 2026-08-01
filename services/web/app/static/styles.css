@@ -45,30 +45,43 @@ html, body {
 
 .grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-areas:
-    "upload chat"
-    "queue  chat"
-    "docs   chat";
+  grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.15fr);
+  grid-template-areas: "sidebar chat";
   gap: 16px;
   padding: 16px;
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
+  align-items: start;
 }
 
-#upload-panel { grid-area: upload; }
-#queue-panel  { grid-area: queue; }
-#docs-panel   { grid-area: docs; }
-#chat-panel   { grid-area: chat; }
+.sidebar {
+  grid-area: sidebar;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+#chat-panel {
+  grid-area: chat;
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 72px);
+  width: 100%;
+  min-width: 0;
+}
 
 @media (max-width: 800px) {
   .grid {
     grid-template-columns: 1fr;
     grid-template-areas:
-      "upload"
-      "queue"
-      "docs"
+      "sidebar"
       "chat";
+  }
+
+  #chat-panel {
+    position: static;
+    max-height: none;
   }
 }
 
@@ -86,6 +99,79 @@ html, body {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.panel-collapsible details {
+  margin: 0;
+}
+
+.panel-collapsible details > summary {
+  list-style: none;
+}
+
+.panel-collapsible details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  user-select: none;
+}
+
+.panel-summary::after {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.panel-collapsible details[open] > .panel-summary {
+  margin-bottom: 12px;
+}
+
+.panel-collapsible details[open] > .panel-summary::after {
+  transform: rotate(180deg);
+}
+
+.panel-collapsible details:not([open]) > .panel-summary {
+  margin-bottom: 0;
+}
+
+#docs-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#docs-panel details {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#docs-panel details[open] {
+  overflow: hidden;
+}
+
+#docs-panel details[open] #docs-list {
+  overflow-y: auto;
+  max-height: min(420px, 40vh);
 }
 
 .field {
@@ -276,7 +362,17 @@ button:disabled {
 .chat {
   display: flex;
   flex-direction: column;
-  min-height: 480px;
+  min-height: 320px;
+  height: calc(100vh - 72px);
+  max-height: calc(100vh - 72px);
+}
+
+@media (max-width: 800px) {
+  .chat {
+    height: auto;
+    max-height: none;
+    min-height: 480px;
+  }
 }
 
 .chat-controls {
@@ -290,6 +386,7 @@ button:disabled {
 .chat-log {
   flex: 1;
   overflow-y: auto;
+  min-height: 0;
   padding: 8px;
   background: var(--code-bg);
   border: 1px solid var(--panel-border);
