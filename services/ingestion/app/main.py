@@ -15,6 +15,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import FileResponse
 from sqlalchemy import text
 
 from rag_shared.db import session_scope
@@ -22,7 +23,7 @@ from rag_shared.security import require_service_key
 from rag_shared.settings import settings
 
 from .pipeline import run_ingestion
-from .storage import save_original
+from .storage import resolve_storage_file, save_original
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("ingestion")
@@ -97,6 +98,36 @@ async def get_document(document_id: UUID) -> dict[str, Any]:
     if not row:
         raise HTTPException(404, "document not found")
     return dict(row)
+
+
+@app.get("/documents/{document_id}/file", dependencies=[Depends(require_service_key)])
+async def get_document_file(document_id: UUID) -> FileResponse:
+    """Stream the stored original upload for download."""
+    async with session_scope() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT storage_path, original_filename, file_type "
+                    "FROM documents WHERE id = :id"
+                ),
+                {"id": str(document_id)},
+            )
+        ).mappings().first()
+    if not row:
+        raise HTTPException(404, "document not found")
+
+    path = resolve_storage_file(row["storage_path"] or "")
+    if path is None:
+        raise HTTPException(404, "original file not found on disk")
+
+    filename = row["original_filename"] or path.name
+    media_type = (row["file_type"] or "").strip() or "application/octet-stream"
+    return FileResponse(
+        path=path,
+        media_type=media_type,
+        filename=filename,
+        content_disposition_type="attachment",
+    )
 
 
 @app.get("/documents", dependencies=[Depends(require_service_key)])

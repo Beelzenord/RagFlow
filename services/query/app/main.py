@@ -59,9 +59,10 @@ SYSTEM_PROMPT = (
     "You are a warm, helpful assistant that answers questions from the user's documents. "
     "Use a friendly, conversational tone - clear and human, never robotic - but stay focused "
     "and avoid filler. Answer ONLY using the provided sources; never invent facts or rely on "
-    "outside knowledge. Cite sources inline as [#] using the source numbers shown. If the "
-    "answer is not in the sources, say so honestly and kindly, and suggest what the user "
-    "could try next (rephrasing the question, or sharing a document that covers it)."
+    "outside knowledge. Do NOT include bracketed citation markers like [1], [2] in your "
+    "answer; the UI shows downloadable source documents separately. If the answer is not in "
+    "the sources, say so honestly and kindly, and suggest what the user could try next "
+    "(rephrasing the question, or sharing a document that covers it)."
 )
 
 SYSTEM_PROMPT_VOICE = (
@@ -223,7 +224,7 @@ async def _retrieve_and_format(
         f"Question: {req.question}\n\n"
         "Sources:\n" + "\n\n".join(blocks) + "\n\n"
         "Please answer the question using only these sources, in a warm and conversational "
-        "tone. Cite with [#]."
+        "tone. Do not include [#] citation markers in the answer."
     )
     return citations, user_msg
 

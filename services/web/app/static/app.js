@@ -5,6 +5,7 @@
 
 const STORAGE_KEY = "rag.docs.v1";
 const SHOW_SOURCES_KEY = "rag.showSources.v1";
+const THEME_KEY = "rag.theme.v1";
 const REFRESH_MS = 5000;
 const POLL_MS = 2000;
 
@@ -39,6 +40,7 @@ const els = {
   queueList: document.getElementById("queue-list"),
   queueSummary: document.getElementById("queue-summary"),
   queueClearBtn: document.getElementById("queue-clear-btn"),
+  themeToggle: document.getElementById("theme-toggle"),
 };
 
 function loadDocsCache() {
@@ -316,6 +318,42 @@ function applyShowSources(on) {
   });
 })();
 
+function getTheme() {
+  try {
+    return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+function applyTheme(theme) {
+  const t = theme === "light" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", t);
+  if (els.themeToggle) {
+    const light = t === "light";
+    els.themeToggle.setAttribute("aria-checked", light ? "true" : "false");
+    els.themeToggle.setAttribute("aria-label", light ? "Use dark mode" : "Use light mode");
+  }
+}
+
+function saveTheme(theme) {
+  try {
+    localStorage.setItem(THEME_KEY, theme === "light" ? "light" : "dark");
+  } catch {
+    /* ignore */
+  }
+}
+
+(function initTheme() {
+  applyTheme(getTheme());
+  if (!els.themeToggle) return;
+  els.themeToggle.addEventListener("click", () => {
+    const next = getTheme() === "light" ? "dark" : "light";
+    saveTheme(next);
+    applyTheme(next);
+  });
+})();
+
 function setProgress(fraction) {
   const pct = Math.max(0, Math.min(1, fraction)) * 100;
   els.uploadBar.style.width = `${pct.toFixed(1)}%`;
@@ -589,6 +627,7 @@ async function runChat(question) {
     if (!evt || typeof evt !== "object") return;
     if (evt.type === "citations") {
       if (Array.isArray(evt.data) && evt.data.length) {
+        bubble.appendChild(renderSourceDocs(evt.data));
         bubble.appendChild(renderCitations(evt.data));
       }
     } else if (evt.type === "delta") {
@@ -603,7 +642,12 @@ async function runChat(question) {
       bubble.classList.add("error");
       answerNode.textContent = `Query failed: ${evt.message || "unknown error"}`;
     } else if (evt.type === "done") {
-      if (!firstDeltaSeen) answerNode.textContent = "(empty answer)";
+      if (!firstDeltaSeen) {
+        answerNode.textContent = "(empty answer)";
+      } else {
+        // Models sometimes still emit [1]/ strip leftover markers from the final text.
+        answerNode.textContent = stripInlineCitations(answerNode.textContent);
+      }
     }
   };
 
@@ -668,7 +712,48 @@ function appendMessage(role, text) {
   return div;
 }
 
+function stripInlineCitations(text) {
+  return String(text || "")
+    .replace(/\s*\[\d+\]/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+}
+
+function renderSourceDocs(list) {
+  /** Always-visible download links for documents used in the answer. */
+  const wrap = document.createElement("div");
+  wrap.className = "source-docs";
+
+  const label = document.createElement("div");
+  label.className = "source-docs-label";
+  label.textContent = "Documents";
+  wrap.appendChild(label);
+
+  const links = document.createElement("div");
+  links.className = "source-docs-links";
+
+  const seen = new Set();
+  for (const c of list) {
+    if (!c.document_id || seen.has(c.document_id)) continue;
+    seen.add(c.document_id);
+    const name = c.filename || "document";
+    const a = document.createElement("a");
+    a.className = "source-doc-link";
+    a.href = `/api/documents/${encodeURIComponent(c.document_id)}/file`;
+    a.download = name;
+    a.title = `Download ${name}`;
+    a.textContent = name;
+    links.appendChild(a);
+  }
+
+  if (!links.childNodes.length) return document.createDocumentFragment();
+  wrap.appendChild(links);
+  return wrap;
+}
+
 function renderCitations(list) {
+  /** Optional detail rows (page, heading, score) gated by "Show source details". */
   const cites = document.createElement("div");
   cites.className = "citations";
   for (const c of list) {

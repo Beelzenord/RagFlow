@@ -5,11 +5,39 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>RAG Console</title>
   <link rel="stylesheet" href="/styles.css" />
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("rag.theme.v1");
+        document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
+      } catch (_) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
 </head>
 <body>
   <header class="topbar">
-    <h1>RAG Console</h1>
-    <span class="hint">Upload documents, watch them index, then ask questions.</span>
+    <div class="topbar-brand">
+      <h1>RAG Console</h1>
+      <span class="hint">Upload documents, watch them index, then ask questions.</span>
+    </div>
+    <button
+      type="button"
+      id="theme-toggle"
+      class="theme-toggle"
+      role="switch"
+      aria-checked="false"
+      aria-label="Use light mode"
+    >
+      <span class="theme-toggle-track" aria-hidden="true">
+        <span class="theme-toggle-thumb"></span>
+      </span>
+      <span class="theme-toggle-text">
+        <span class="theme-label-dark">Dark</span>
+        <span class="theme-label-light">Light</span>
+      </span>
+    </button>
   </header>
 
   <main class="grid">
@@ -62,7 +90,7 @@
         </label>
         <label class="field inline checkbox">
           <input type="checkbox" id="show-sources" checked />
-          <span>Show sources</span>
+          <span>Show source details</span>
         </label>
       </div>
       <div id="chat-log" class="chat-log" aria-live="polite"></div>

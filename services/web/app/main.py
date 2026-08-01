@@ -155,6 +155,49 @@ async def api_document_delete(document_id: UUID, request: Request) -> JSONRespon
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
+@app.get("/api/documents/{document_id}/file")
+async def api_document_file(document_id: UUID, request: Request) -> StreamingResponse:
+    """Proxy the original upload from ingestion so the browser can download it."""
+    client: httpx.AsyncClient = request.app.state.http
+    url = f"{INGESTION_URL}/documents/{document_id}/file"
+    try:
+        upstream = await client.send(
+            client.build_request("GET", url, headers=_auth_headers()),
+            stream=True,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
+
+    if upstream.status_code >= 400:
+        try:
+            body_bytes = await upstream.aread()
+        finally:
+            await upstream.aclose()
+        msg = body_bytes.decode(errors="replace")[:500] or f"HTTP {upstream.status_code}"
+        raise HTTPException(upstream.status_code, msg)
+
+    media_type = upstream.headers.get("content-type") or "application/octet-stream"
+    out_headers: dict[str, str] = {}
+    cd = upstream.headers.get("content-disposition")
+    if cd:
+        out_headers["content-disposition"] = cd
+    cl = upstream.headers.get("content-length")
+    if cl:
+        out_headers["content-length"] = cl
+
+    async def stream_body() -> Any:
+        try:
+            async for chunk in upstream.aiter_bytes():
+                if chunk:
+                    yield chunk
+        except httpx.HTTPError as exc:
+            log.warning("document file stream failed: %s", exc)
+        finally:
+            await upstream.aclose()
+
+    return StreamingResponse(stream_body(), media_type=media_type, headers=out_headers)
+
+
 class QueryBody(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     document_id: str | None = None

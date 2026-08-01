@@ -1,4 +1,6 @@
-:root {
+:root,
+html[data-theme="dark"] {
+  color-scheme: dark;
   --bg: #0e1116;
   --panel: #161b22;
   --panel-border: #232a33;
@@ -10,6 +12,31 @@
   --warn: #d29922;
   --err: #f85149;
   --code-bg: #0b0f14;
+  --msg-user-bg: rgba(79, 140, 255, 0.15);
+  --msg-bot-bg: rgba(255, 255, 255, 0.04);
+  --danger-hover-bg: rgba(248, 81, 73, 0.12);
+  --toggle-track: #232a33;
+  --toggle-thumb: #e6edf3;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f8fa;
+  --panel: #ffffff;
+  --panel-border: #d0d7de;
+  --text: #1f2328;
+  --muted: #656d76;
+  --accent: #0969da;
+  --accent-fg: #ffffff;
+  --ok: #1a7f37;
+  --warn: #9a6700;
+  --err: #cf222e;
+  --code-bg: #eaeef2;
+  --msg-user-bg: rgba(9, 105, 218, 0.12);
+  --msg-bot-bg: rgba(31, 35, 40, 0.05);
+  --danger-hover-bg: rgba(207, 34, 46, 0.1);
+  --toggle-track: #d0d7de;
+  --toggle-thumb: #ffffff;
 }
 
 * { box-sizing: border-box; }
@@ -28,8 +55,18 @@ html, body {
   padding: 18px 24px;
   border-bottom: 1px solid var(--panel-border);
   display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: var(--bg);
+}
+
+.topbar-brand {
+  display: flex;
   align-items: baseline;
   gap: 16px;
+  flex: 1;
+  min-width: 0;
 }
 
 .topbar h1 {
@@ -41,6 +78,76 @@ html, body {
 .topbar .hint {
   color: var(--muted);
   font-size: 13px;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.theme-toggle:hover {
+  border-color: var(--muted);
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.theme-toggle-track {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--toggle-track);
+  border: 1px solid var(--panel-border);
+  flex-shrink: 0;
+  transition: background 0.2s ease;
+}
+
+.theme-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--toggle-thumb);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s ease;
+}
+
+html[data-theme="light"] .theme-toggle-thumb {
+  transform: translateX(18px);
+}
+
+.theme-toggle-text {
+  min-width: 2.75rem;
+  text-align: left;
+}
+
+.theme-label-light {
+  display: none;
+}
+
+html[data-theme="light"] .theme-label-dark {
+  display: none;
+}
+
+html[data-theme="light"] .theme-label-light {
+  display: inline;
 }
 
 .grid {
@@ -320,7 +427,7 @@ button:disabled {
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: rgba(248, 81, 73, 0.12);
+  background: var(--danger-hover-bg);
   border-color: var(--err);
 }
 
@@ -405,12 +512,12 @@ button:disabled {
 }
 
 .msg.user {
-  background: rgba(79, 140, 255, 0.15);
+  background: var(--msg-user-bg);
   align-self: flex-end;
 }
 
 .msg.bot {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--msg-bot-bg);
   border: 1px solid var(--panel-border);
   align-self: flex-start;
 }
@@ -418,6 +525,49 @@ button:disabled {
 .msg.error {
   border-color: var(--err);
   color: var(--err);
+}
+
+.source-docs {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--panel-border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.source-docs-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.source-docs-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.source-doc-link {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 6px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--msg-user-bg);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.source-doc-link:hover {
+  text-decoration: underline;
+  filter: brightness(1.05);
 }
 
 .citations {

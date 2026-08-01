@@ -26,3 +26,25 @@ def save_markdown(document_id: str, markdown: str) -> str:
 
 def read_original(path: str) -> bytes:
     return Path(path).read_bytes()
+
+
+def resolve_storage_file(path: str) -> Path | None:
+    """Return an absolute Path if `path` exists and stays under storage_dir.
+
+    Rejects missing files and any path that escapes the configured root
+    (path-traversal / tainted DB row).
+    """
+    if not path:
+        return None
+    root = Path(settings.storage_dir).resolve()
+    try:
+        resolved = Path(path).resolve()
+    except OSError:
+        return None
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        return None
+    if not resolved.is_file():
+        return None
+    return resolved
