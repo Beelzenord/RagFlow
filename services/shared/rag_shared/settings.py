@@ -47,14 +47,18 @@ class Settings(BaseSettings):
     # of one document can trigger it before we fall back to the text layer.
     parse_repair_max_pages: int = 20
 
-    # Query
+    # Query. Each retriever contributes retrieval_pool_size candidates, which
+    # are fused and cut to retrieval_top_k. min_score gates the vector side
+    # only - lexical hits are already filtered by matching the query terms.
     retrieval_top_k: int = 6
     retrieval_min_score: float = 0.25
     retrieval_pool_size: int = 30
-
-    # Reranker (local cross-encoder)
-    reranker_enabled: bool = True
-    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    # Reciprocal Rank Fusion constant. Higher flattens the weighting between
+    # ranks; 60 is the value from the original RRF paper and a sane default.
+    retrieval_rrf_k: int = 60
+    # Lexical search ignores any term appearing in more than this share of
+    # chunks. It is there to find identifiers, not to re-do semantic search.
+    retrieval_lexical_max_df: float = 0.02
 
     # Auth
     service_api_key: str = ""

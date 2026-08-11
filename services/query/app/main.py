@@ -2,7 +2,6 @@
 already happened during ingestion."""
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -27,24 +26,9 @@ log = logging.getLogger("query")
 async def lifespan(app: FastAPI):
     """Build the embedding + LLM clients once per process and reuse their
     connection pools across all requests. Saves a TLS handshake (or two) per
-    /query call. The reranker model is also loaded once (heavyweight: ~600 MB
-    on disk, ~1-2 GB resident) and held on app.state; if it can't be loaded
-    (model missing, torch not installed) we degrade cleanly to ANN-only."""
+    /query call."""
     app.state.embedder = EmbeddingClient()
     app.state.llm = LLMClient()
-    app.state.reranker = None
-    if settings.reranker_enabled:
-        try:
-            from .reranker import Reranker
-
-            app.state.reranker = Reranker()
-            log.info("reranker ready (%s)", settings.reranker_model)
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "reranker disabled: failed to load %s: %s",
-                settings.reranker_model,
-                exc,
-            )
     log.info("query service ready (embedder + llm clients initialized)")
     try:
         yield
@@ -172,7 +156,11 @@ class Citation(BaseModel):
     filename: str
     page_number: int | None
     heading: str | None
+    # Vector cosine similarity, reported for every hit even when the chunk was
+    # surfaced by the lexical retriever.
     score: float
+    # Which retriever(s) found this chunk: "dense", "lexical", or "both".
+    retrieval: str = "dense"
 
 
 class QueryResponse(BaseModel):
@@ -205,25 +193,90 @@ def _build_filter(req: QueryRequest) -> tuple[str, dict[str, Any]]:
     return " AND ".join(clauses), params
 
 
+# Counting how many chunks contain a term is O(matches), so a word like "the"
+# would cost a full index walk on every query. Stop counting past the point
+# where the answer stops mattering - anything at the cap is far too common to
+# be of interest to this retriever.
+_DF_CAP = 5000
+# On a small corpus a percentage cutoff would demand near-uniqueness, so never
+# require a term to be rarer than this many chunks.
+_MIN_RARE_CHUNKS = 3
+# Length at which a purely alphabetic term is allowed through. Short words are
+# grammar; identifiers and the distinctive nouns worth a literal search are
+# longer than this or contain a digit.
+_MIN_LEXEME_LEN = 6
+
+# The lexical retriever exists to catch what vector search misses: invoice
+# numbers, meter IDs, org numbers, fuse ratings, place and product names. Which
+# query terms it searches for matters more than how it ranks them.
+#
+# Rarity alone is not enough to pick them out. Postgres text search has no
+# inverse document frequency, so unweighted it lets a chunk repeating "number"
+# and "document" outrank the one chunk holding the identifier the user typed.
+# But weighting by corpus frequency has its own failure: in a small or
+# multilingual corpus, English function words are genuinely rare. Measured
+# here, "how" appeared in 3 chunks and "many" in 5, while "vacation" appeared
+# in 32 - so frequency by itself keeps the grammar and discards the content.
+#
+# Shape settles it. A term earns a literal search by containing a digit or by
+# being long, and by then also being rare. Everything else is left to the
+# vector side, which is good at exactly the words this drops. A question made
+# only of common short words yields no lexical hits at all, which is correct
+# rather than a gap - it also stops weak matches from bypassing the vector
+# score floor applied further down.
+#
+# Surviving weights are squared before summing so that one unique token beats
+# several merely uncommon ones outright instead of narrowly edging them out.
+_LEXICAL_TERMS = """
+    SELECT lexeme, ln(1 + total::float / df) AS idf
+    FROM (
+        SELECT u.lexeme,
+               (SELECT count(*) FROM (
+                   SELECT 1 FROM document_chunks c2
+                   WHERE c2.content_tsv @@ to_tsquery('simple', quote_literal(u.lexeme))
+                   LIMIT GREATEST(
+                       :df_cap,
+                       ((SELECT count(*) FROM document_chunks) * :max_df)::int + 1
+                   )
+               ) capped) AS df,
+               (SELECT count(*) FROM document_chunks) AS total
+        FROM unnest(to_tsvector('simple', :qtext)) AS u
+        WHERE length(u.lexeme) >= :min_len OR u.lexeme ~ '[0-9]'
+    ) counted
+    WHERE df BETWEEN 1 AND GREATEST((total * :max_df)::int, :min_rare)
+"""
+
+
+def _retrieval_label(in_dense: bool, in_lexical: bool) -> str:
+    if in_dense and in_lexical:
+        return "both"
+    return "lexical" if in_lexical else "dense"
+
+
 async def _retrieve_and_format(
     req: QueryRequest,
     embedder: EmbeddingClient,
-    reranker: Any | None = None,
     search_query: str | None = None,
 ) -> tuple[list[Citation], str | None]:
-    """Run embedding + vector search, optionally rerank, and build the LLM
-    user prompt.
+    """Run hybrid retrieval and build the LLM user prompt.
 
-    Returns (citations, user_prompt). user_prompt is None when no rows match,
+    Two retrievers cover the same filtered candidates: pgvector cosine for
+    meaning, and a tsvector match for literal tokens. They fail in different
+    places - vector search is poor at OCR numbers, org numbers and fuse
+    ratings, which is precisely what lexical search is best at - so their
+    rankings are combined with Reciprocal Rank Fusion. RRF needs no score
+    normalisation, which matters because cosine similarity and ts_rank_cd are
+    not on comparable scales; only their orderings are.
+
+    The min_score floor applies to the vector side alone. Matching the query's
+    terms is already a hard filter on the lexical side, and a chunk found by
+    its invoice number is exactly the hit a cosine floor would discard.
+
+    Returns (citations, user_prompt). user_prompt is None when nothing matched,
     in which case the caller should short-circuit with NO_HITS_ANSWER.
 
-    `search_query` is what gets embedded and reranked (the standalone rewrite of
-    a follow-up); the prompt still shows the user's own wording.
-
-    When a reranker is supplied, we pull a larger ANN pool (retrieval_pool_size)
-    and let the cross-encoder pick the final top_k. The min_score gate is
-    always applied to the **vector cosine** score (cross-encoder scores are
-    unbounded and not comparable).
+    `search_query` is what gets retrieved on (the standalone rewrite of a
+    follow-up); the prompt still shows the user's own wording.
     """
     query_text = search_query or req.question
     try:
@@ -232,12 +285,56 @@ async def _retrieve_and_format(
         raise HTTPException(502, f"embedding failed: {exc}") from exc
 
     top_k = req.top_k or settings.retrieval_top_k
-    pool = max(top_k, settings.retrieval_pool_size) if reranker else top_k
     where, params = _build_filter(req)
-    params["q"] = str(q_vec)
-    params["k"] = pool
+    params.update(
+        {
+            "q": str(q_vec),
+            "qtext": query_text,
+            "pool": max(top_k, settings.retrieval_pool_size),
+            "k": top_k,
+            "rrf_k": settings.retrieval_rrf_k,
+            "min_score": settings.retrieval_min_score,
+            "df_cap": _DF_CAP,
+            "max_df": settings.retrieval_lexical_max_df,
+            "min_rare": _MIN_RARE_CHUNKS,
+            "min_len": _MIN_LEXEME_LEN,
+        }
+    )
 
     sql = f"""
+        WITH lex_terms AS ({_LEXICAL_TERMS}),
+        dense AS (
+            SELECT c.id,
+                   row_number() OVER (ORDER BY c.embedding <=> :q) AS rank
+            FROM document_chunks c
+            JOIN documents d ON d.id = c.document_id
+            WHERE {where}
+            ORDER BY c.embedding <=> :q
+            LIMIT :pool
+        ),
+        lexical AS (
+            SELECT c.id,
+                   row_number() OVER (
+                       ORDER BY SUM(t.idf * t.idf) DESC, c.id
+                   ) AS rank
+            FROM document_chunks c
+            JOIN documents d ON d.id = c.document_id
+            JOIN lex_terms t
+              ON c.content_tsv @@ to_tsquery('simple', quote_literal(t.lexeme))
+            WHERE {where}
+            GROUP BY c.id
+            ORDER BY SUM(t.idf * t.idf) DESC, c.id
+            LIMIT :pool
+        ),
+        fused AS (
+            SELECT COALESCE(dn.id, lx.id)                  AS id,
+                   COALESCE(1.0 / (:rrf_k + dn.rank), 0)
+                     + COALESCE(1.0 / (:rrf_k + lx.rank), 0) AS rrf,
+                   (dn.id IS NOT NULL)                     AS in_dense,
+                   (lx.id IS NOT NULL)                     AS in_lexical
+            FROM dense dn
+            FULL OUTER JOIN lexical lx ON lx.id = dn.id
+        )
         SELECT  c.id            AS chunk_id,
                 c.document_id,
                 c.chunk_index,
@@ -245,30 +342,21 @@ async def _retrieve_and_format(
                 c.heading,
                 c.content,
                 d.original_filename,
-                1 - (c.embedding <=> :q) AS score
-        FROM document_chunks c
+                1 - (c.embedding <=> :q) AS score,
+                f.in_dense,
+                f.in_lexical
+        FROM fused f
+        JOIN document_chunks c ON c.id = f.id
         JOIN documents d ON d.id = c.document_id
-        WHERE {where}
-        ORDER BY c.embedding <=> :q
+        WHERE f.in_lexical OR (1 - (c.embedding <=> :q)) >= :min_score
+        ORDER BY f.rrf DESC
         LIMIT :k
     """
     async with session_scope() as session:
         rows = (await session.execute(text(sql), params)).mappings().all()
 
-    # Gate on vector cosine before reranking so obvious junk never enters the
-    # cross-encoder (saves time) and never reaches the LLM (saves accuracy).
-    rows = [r for r in rows if r["score"] >= settings.retrieval_min_score]
     if not rows:
         return [], None
-
-    if reranker and len(rows) > top_k:
-        # CrossEncoder.predict is CPU-bound; offload so we don't stall the
-        # event loop for other concurrent requests.
-        rows = await asyncio.to_thread(
-            reranker.rerank, query_text, list(rows), top_k
-        )
-    else:
-        rows = list(rows[:top_k])
 
     blocks: list[str] = []
     citations: list[Citation] = []
@@ -287,6 +375,7 @@ async def _retrieve_and_format(
                 page_number=r["page_number"],
                 heading=r["heading"],
                 score=float(r["score"]),
+                retrieval=_retrieval_label(r["in_dense"], r["in_lexical"]),
             )
         )
 
@@ -303,12 +392,11 @@ async def _retrieve_and_format(
 async def query(req: QueryRequest, request: Request) -> QueryResponse:
     embedder: EmbeddingClient = request.app.state.embedder
     llm: LLMClient = request.app.state.llm
-    reranker = request.app.state.reranker
 
     search_query = await _rewrite_question(req, llm)
     rewritten = search_query if search_query != req.question else None
     citations, user_msg = await _retrieve_and_format(
-        req, embedder, reranker, search_query=search_query
+        req, embedder, search_query=search_query
     )
     if user_msg is None:
         return QueryResponse(answer=NO_HITS_ANSWER, citations=[], search_query=rewritten)
@@ -339,9 +427,8 @@ async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse
     """
     embedder: EmbeddingClient = request.app.state.embedder
     llm: LLMClient = request.app.state.llm
-    reranker = request.app.state.reranker
     return StreamingResponse(
-        _run_stream(req, embedder, llm, reranker),
+        _run_stream(req, embedder, llm),
         media_type="application/x-ndjson",
     )
 
@@ -354,7 +441,6 @@ async def _run_stream(
     req: QueryRequest,
     embedder: EmbeddingClient,
     llm: LLMClient,
-    reranker: Any | None = None,
 ) -> AsyncIterator[bytes]:
     search_query = await _rewrite_question(req, llm)
     if search_query != req.question:
@@ -363,7 +449,7 @@ async def _run_stream(
 
     try:
         citations, user_msg = await _retrieve_and_format(
-            req, embedder, reranker, search_query=search_query
+            req, embedder, search_query=search_query
         )
     except HTTPException as exc:
         yield _ndjson({"type": "error", "message": str(exc.detail)})

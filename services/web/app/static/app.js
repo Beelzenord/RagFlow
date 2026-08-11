@@ -825,8 +825,15 @@ function renderCitations(list) {
     const loc = [c.filename, c.page_number ? `p.${c.page_number}` : null, c.heading]
       .filter(Boolean)
       .join(" - ");
-    const score = typeof c.score === "number" ? ` (score ${c.score.toFixed(2)})` : "";
-    line.textContent = `[${c.n}] ${loc}${score}`;
+    // "vector", "keyword" or "both" - which retriever found this chunk. The
+    // score is always vector similarity, so a keyword-only hit can score low
+    // and still be the right answer; showing both together explains that.
+    const found = { dense: "vector", lexical: "keyword", both: "both" }[c.retrieval];
+    const detail = [
+      typeof c.score === "number" ? `score ${c.score.toFixed(2)}` : null,
+      found ? `found by ${found}` : null,
+    ].filter(Boolean);
+    line.textContent = `[${c.n}] ${loc}${detail.length ? ` (${detail.join(", ")})` : ""}`;
     cites.appendChild(line);
   }
   return cites;

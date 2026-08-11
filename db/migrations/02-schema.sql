@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     page_number  INTEGER,
     heading      TEXT,
     content      TEXT NOT NULL,
+    -- Lexical half of hybrid retrieval; see 04-hybrid-search.sql for why
+    -- 'simple' rather than a language-specific configuration.
+    content_tsv  tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
     token_count  INTEGER,
     -- Embedding dimension is provider-specific. text-embedding-3-small = 1536.
     -- If you switch models, run a migration to alter this column + reprocess.
@@ -39,6 +42,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
 
 CREATE INDEX IF NOT EXISTS chunks_document_idx ON document_chunks (document_id);
 CREATE INDEX IF NOT EXISTS chunks_metadata_idx ON document_chunks USING GIN (metadata);
+CREATE INDEX IF NOT EXISTS chunks_content_tsv_idx ON document_chunks USING GIN (content_tsv);
 
 -- HNSW for cosine similarity. Requires pgvector >= 0.5 (pg16 image ships it).
 CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw
