@@ -7,6 +7,10 @@ const STORAGE_KEY = "rag.docs.v1";
 const SHOW_SOURCES_KEY = "rag.showSources.v1";
 const THEME_KEY = "rag.theme.v1";
 const REFRESH_MS = 5000;
+// Follow-ups are resolved server-side against these turns, so the window is a
+// tradeoff between context and prompt cost. 6 turns ~ 3 exchanges.
+const MAX_HISTORY_TURNS = 6;
+const MAX_TURN_CHARS = 1500;
 const POLL_MS = 2000;
 
 const state = {
@@ -18,6 +22,7 @@ const state = {
   queue: [],
   queueBusy: false,
   nextQid: 1,
+  turns: [],
 };
 
 const els = {
@@ -41,6 +46,7 @@ const els = {
   queueSummary: document.getElementById("queue-summary"),
   queueClearBtn: document.getElementById("queue-clear-btn"),
   themeToggle: document.getElementById("theme-toggle"),
+  newChatBtn: document.getElementById("new-chat-btn"),
 };
 
 function loadDocsCache() {
@@ -609,6 +615,7 @@ els.queueClearBtn.addEventListener("click", () => {
 async function runChat(question) {
   if (!question) return;
   const documentId = els.scopeSelect.value || null;
+  const history = state.turns.slice(-MAX_HISTORY_TURNS);
 
   appendMessage("user", question);
   els.askBtn.disabled = true;
@@ -622,10 +629,13 @@ async function runChat(question) {
   answerNode.appendChild(spinner);
   bubble.appendChild(answerNode);
   let firstDeltaSeen = false;
+  let answered = false;
 
   const handleEvent = (evt) => {
     if (!evt || typeof evt !== "object") return;
-    if (evt.type === "citations") {
+    if (evt.type === "rewrite") {
+      if (evt.text) bubble.appendChild(renderRewrite(evt.text));
+    } else if (evt.type === "citations") {
       if (Array.isArray(evt.data) && evt.data.length) {
         bubble.appendChild(renderSourceDocs(evt.data));
         bubble.appendChild(renderCitations(evt.data));
@@ -647,6 +657,7 @@ async function runChat(question) {
       } else {
         // Models sometimes still emit [1]/ strip leftover markers from the final text.
         answerNode.textContent = stripInlineCitations(answerNode.textContent);
+        answered = true;
       }
     }
   };
@@ -654,6 +665,7 @@ async function runChat(question) {
   try {
     const body = { question };
     if (documentId) body.document_id = documentId;
+    if (history.length) body.history = history;
     const resp = await fetch("/api/query/stream", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -692,7 +704,39 @@ async function runChat(question) {
     answerNode.textContent = `Query failed: ${err.message}`;
   } finally {
     els.askBtn.disabled = false;
+    // Only successful exchanges become context - errors, empty answers and
+    // "nothing found" replies would just be noise in the next rewrite.
+    if (answered) {
+      recordTurn("user", question);
+      recordTurn("assistant", answerNode.textContent);
+    }
   }
+}
+
+function recordTurn(role, content) {
+  const text = String(content || "").trim();
+  if (!text) return;
+  state.turns.push({ role, content: text.slice(0, MAX_TURN_CHARS) });
+  // Keep a little more than we send so trimming never drops a live pair.
+  const cap = MAX_HISTORY_TURNS * 2;
+  if (state.turns.length > cap) state.turns = state.turns.slice(-cap);
+  updateNewChatBtn();
+}
+
+function resetChat() {
+  state.turns = [];
+  els.chatLog.innerHTML = "";
+  updateNewChatBtn();
+  els.questionInput.focus();
+}
+
+function updateNewChatBtn() {
+  if (els.newChatBtn) els.newChatBtn.disabled = state.turns.length === 0;
+}
+
+if (els.newChatBtn) {
+  els.newChatBtn.addEventListener("click", resetChat);
+  updateNewChatBtn();
 }
 
 els.chatForm.addEventListener("submit", (e) => {
@@ -718,6 +762,14 @@ function stripInlineCitations(text) {
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
+}
+
+function renderRewrite(text) {
+  /** Shows how a follow-up was interpreted; hidden with source details. */
+  const div = document.createElement("div");
+  div.className = "rewrite";
+  div.textContent = `Searched for: ${text}`;
+  return div;
 }
 
 function renderSourceDocs(list) {

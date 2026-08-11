@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator, Literal
+from typing import AsyncIterator, Literal, Sequence
 
 import httpx
 
 from .settings import settings
 
 Role = Literal["system", "user", "assistant"]
+# Prior conversation turns, oldest first: ("user" | "assistant", content).
+Turn = tuple[Role, str]
 
 
 class LLMClient:
@@ -35,7 +37,31 @@ class LLMClient:
                 timeout=120.0,
             )
 
-    async def complete(self, system: str, user: str, max_tokens: int = 1024) -> str:
+    def _messages(
+        self, system: str, user: str, history: Sequence[Turn] | None
+    ) -> list[dict[str, str]]:
+        """Build the provider message array.
+
+        Anthropic takes `system` as a top-level field while OpenAI expects it as
+        the first message; both accept the same alternating user/assistant turns.
+        """
+        msgs: list[dict[str, str]] = []
+        if self._provider != "anthropic":
+            msgs.append({"role": "system", "content": system})
+        for role, content in history or ():
+            if role in ("user", "assistant") and content:
+                msgs.append({"role": role, "content": content})
+        msgs.append({"role": "user", "content": user})
+        return msgs
+
+    async def complete(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 1024,
+        history: Sequence[Turn] | None = None,
+    ) -> str:
+        messages = self._messages(system, user, history)
         if self._provider == "anthropic":
             resp = await self._client.post(
                 "/v1/messages",
@@ -43,7 +69,7 @@ class LLMClient:
                     "model": self._model,
                     "max_tokens": max_tokens,
                     "system": system,
-                    "messages": [{"role": "user", "content": user}],
+                    "messages": messages,
                 },
             )
             resp.raise_for_status()
@@ -55,17 +81,18 @@ class LLMClient:
             json={
                 "model": self._model,
                 "max_tokens": max_tokens,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
+                "messages": messages,
             },
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
     async def stream(
-        self, system: str, user: str, max_tokens: int = 1024
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 1024,
+        history: Sequence[Turn] | None = None,
     ) -> AsyncIterator[str]:
         """Yield text deltas as they arrive from the upstream provider.
 
@@ -73,23 +100,24 @@ class LLMClient:
         all chunks to reconstruct the full answer.
         """
         if self._provider == "anthropic":
-            async for delta in self._stream_anthropic(system, user, max_tokens):
+            async for delta in self._stream_anthropic(system, user, max_tokens, history):
                 yield delta
             return
-        async for delta in self._stream_openai(system, user, max_tokens):
+        async for delta in self._stream_openai(system, user, max_tokens, history):
             yield delta
 
     async def _stream_openai(
-        self, system: str, user: str, max_tokens: int
+        self,
+        system: str,
+        user: str,
+        max_tokens: int,
+        history: Sequence[Turn] | None = None,
     ) -> AsyncIterator[str]:
         payload = {
             "model": self._model,
             "max_tokens": max_tokens,
             "stream": True,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": self._messages(system, user, history),
         }
         async with self._client.stream("POST", "/chat/completions", json=payload) as resp:
             await _raise_for_stream_status(resp)
@@ -111,14 +139,18 @@ class LLMClient:
                     yield delta
 
     async def _stream_anthropic(
-        self, system: str, user: str, max_tokens: int
+        self,
+        system: str,
+        user: str,
+        max_tokens: int,
+        history: Sequence[Turn] | None = None,
     ) -> AsyncIterator[str]:
         payload = {
             "model": self._model,
             "max_tokens": max_tokens,
             "stream": True,
             "system": system,
-            "messages": [{"role": "user", "content": user}],
+            "messages": self._messages(system, user, history),
         }
         async with self._client.stream("POST", "/v1/messages", json=payload) as resp:
             await _raise_for_stream_status(resp)

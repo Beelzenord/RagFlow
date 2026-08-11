@@ -581,7 +581,15 @@ button:disabled {
   gap: 4px;
 }
 
-.chat-log.hide-citations .citations {
+.rewrite {
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.chat-log.hide-citations .citations,
+.chat-log.hide-citations .rewrite {
   display: none;
 }
 

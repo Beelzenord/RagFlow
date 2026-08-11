@@ -10,7 +10,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import httpx
@@ -198,6 +198,11 @@ async def api_document_file(document_id: UUID, request: Request) -> StreamingRes
     return StreamingResponse(stream_body(), media_type=media_type, headers=out_headers)
 
 
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=4000)
+
+
 class QueryBody(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     document_id: str | None = None
@@ -206,6 +211,8 @@ class QueryBody(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=50)
     voice: bool | None = None
     lang: str | None = None
+    # Prior turns, oldest first, excluding the current question.
+    history: list[ChatTurn] | None = Field(default=None, max_length=12)
 
 
 @app.post("/api/query")
