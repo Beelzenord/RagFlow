@@ -458,12 +458,18 @@ button:disabled {
 .badge.uploaded   { color: var(--muted); }
 .badge.processing { color: var(--warn);  border-color: var(--warn); }
 .badge.completed  { color: var(--ok);    border-color: var(--ok);   }
+.badge.degraded   { color: var(--warn);  border-color: var(--warn); }
 .badge.failed     { color: var(--err);   border-color: var(--err);  }
 
 .doc-error {
   color: var(--err);
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+.doc-note {
+  color: var(--warn);
+  font-size: 12px;
 }
 
 .chat {

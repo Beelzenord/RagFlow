@@ -1,6 +1,7 @@
 """End-to-end ingestion: parse → chunk → embed → persist. Runs in a background
 task. All heavy work happens here — never at query time."""
 from __future__ import annotations
+import json
 import logging
 from datetime import datetime, timezone
 from sqlalchemy import text
@@ -59,10 +60,18 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
             )
             original_filename = row.scalar_one_or_none() or ""
 
-        # 2. Parse to markdown (network-bound to LlamaCloud)
-        markdown = await parse_to_markdown(storage_path, file_type)
+        # 2. Parse to markdown (network-bound to LlamaCloud), verified per page
+        # against the PDF's own text layer.
+        parsed = await parse_to_markdown(storage_path, file_type)
+        markdown = parsed.markdown
         if not markdown.strip():
             raise RuntimeError("LlamaParse returned empty markdown")
+        if parsed.degraded:
+            log.warning(
+                "document_id=%s parsed with degraded pages %s (layout lost, content recovered)",
+                document_id,
+                parsed.recovered_pages,
+            )
         md_path = save_markdown(document_id, markdown)
 
         # 3. Chunk
@@ -95,10 +104,15 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
             )
             await session.execute(
                 text(
-                    "UPDATE documents SET markdown_text = :t, markdown_storage_path = :p "
-                    "WHERE id = :id"
+                    "UPDATE documents SET markdown_text = :t, markdown_storage_path = :p, "
+                    "metadata = metadata || CAST(:meta AS jsonb) WHERE id = :id"
                 ),
-                {"t": markdown, "p": md_path, "id": document_id},
+                {
+                    "t": markdown,
+                    "p": md_path,
+                    "meta": json.dumps(parsed.as_metadata()),
+                    "id": document_id,
+                },
             )
             for chunk, vec in zip(chunks, embeddings):
                 await session.execute(
@@ -119,7 +133,9 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
                         "m": "{}",
                     },
                 )
-            await _set_doc_status(session, document_id, "completed")
+            await _set_doc_status(
+                session, document_id, "degraded" if parsed.degraded else "completed"
+            )
             await _finish_job(session, job_id, "completed")
 
         log.info("ingestion completed document_id=%s chunks=%d", document_id, len(chunks))

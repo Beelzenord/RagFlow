@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS documents (
     markdown_storage_path TEXT,
     markdown_text        TEXT,
     status               TEXT        NOT NULL DEFAULT 'uploaded'
-        CHECK (status IN ('uploaded','processing','completed','failed')),
+        CHECK (status IN ('uploaded','processing','completed','failed','degraded')),
     error_message        TEXT,
     user_id              TEXT,
     collection           TEXT,

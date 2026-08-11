@@ -93,8 +93,14 @@ async function refreshDocs() {
   }
 }
 
+// "degraded" means indexed, but at least one page was recovered from the raw
+// PDF text layer - searchable like any other finished document.
+function isIndexed(status) {
+  return status === "completed" || status === "degraded";
+}
+
 function isTerminal(status) {
-  return status === "completed" || status === "failed";
+  return isIndexed(status) || status === "failed";
 }
 
 function renderDocs() {
@@ -154,6 +160,14 @@ function renderDocs() {
       li.appendChild(err);
     }
 
+    if (d.status === "degraded") {
+      const note = document.createElement("div");
+      note.className = "doc-note";
+      note.textContent =
+        "Some pages were recovered from the raw PDF text - content is complete, layout is not.";
+      li.appendChild(note);
+    }
+
     els.docsList.appendChild(li);
   }
   renderScopeOptions();
@@ -167,7 +181,7 @@ function renderScopeOptions() {
   all.textContent = "All completed documents";
   els.scopeSelect.appendChild(all);
   for (const d of state.docs) {
-    if (d.status !== "completed") continue;
+    if (!isIndexed(d.status)) continue;
     const opt = document.createElement("option");
     opt.value = d.id;
     opt.textContent = d.filename || d.id;
@@ -242,9 +256,11 @@ function startPolling(docId) {
         clearInterval(state.pollers.get(docId));
         state.pollers.delete(docId);
         if (state.lastUploadId === docId) {
-          if (data.status === "completed") {
+          if (isIndexed(data.status)) {
             const n = typeof data.chunk_count === "number" ? data.chunk_count : 0;
-            setStatus(els.uploadStatus, `Done - ${n} chunks indexed`, "ok");
+            const suffix =
+              data.status === "degraded" ? " (some pages recovered from raw text)" : "";
+            setStatus(els.uploadStatus, `Done - ${n} chunks indexed${suffix}`, "ok");
           } else {
             const reason = data.error_message || "see document row";
             setStatus(els.uploadStatus, `Failed: ${reason}`, "error");
@@ -498,7 +514,7 @@ function renderQueue() {
     if (it.status === "queued") queued++;
     else if (it.status === "uploading") uploading++;
     else if (it.status === "processing") processing++;
-    else if (it.status === "completed") completed++;
+    else if (isIndexed(it.status)) completed++;
     else if (it.status === "failed") failed++;
   }
   const parts = [];
@@ -560,7 +576,7 @@ function renderQueue() {
       c.textContent = `collection: ${it.collection}`;
       meta.appendChild(c);
     }
-    if (it.status === "completed" && typeof it.chunkCount === "number") {
+    if (isIndexed(it.status) && typeof it.chunkCount === "number") {
       const cc = document.createElement("span");
       cc.textContent = `${it.chunkCount} chunks`;
       meta.appendChild(cc);
@@ -587,9 +603,7 @@ function renderQueue() {
     els.queueList.appendChild(li);
   }
 
-  const anyFinished = items.some(
-    (q) => q.status === "completed" || q.status === "failed",
-  );
+  const anyFinished = items.some((q) => isTerminal(q.status));
   els.queueClearBtn.disabled = !anyFinished;
 }
 
@@ -606,9 +620,7 @@ function formatBytes(n) {
 }
 
 els.queueClearBtn.addEventListener("click", () => {
-  state.queue = state.queue.filter(
-    (q) => q.status !== "completed" && q.status !== "failed",
-  );
+  state.queue = state.queue.filter((q) => !isTerminal(q.status));
   renderQueue();
 });
 

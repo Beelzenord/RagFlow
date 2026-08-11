@@ -188,7 +188,10 @@ async def healthz() -> dict[str, str]:
 
 
 def _build_filter(req: QueryRequest) -> tuple[str, dict[str, Any]]:
-    clauses = ["d.status = 'completed'"]
+    # 'degraded' documents lost layout on one or more pages but kept their
+    # content, so they stay searchable - excluding them would hide the very
+    # pages the recovery was performed to save.
+    clauses = ["d.status IN ('completed','degraded')"]
     params: dict[str, Any] = {}
     if req.document_id:
         clauses.append("d.id = :document_id")

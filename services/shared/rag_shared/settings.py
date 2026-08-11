@@ -36,6 +36,17 @@ class Settings(BaseSettings):
     chunk_size: int = 512
     chunk_overlap: int = 64
 
+    # Parse verification. Thresholds are calibrated so that a page has to
+    # collapse, not merely be tidied up, before it counts as a failure - see
+    # ingestion/app/quality.py for what each number is measuring.
+    parse_verify_enabled: bool = True
+    parse_min_coverage: float = 0.35
+    parse_min_word_length: float = 3.2
+    parse_max_single_char_ratio: float = 0.35
+    # Re-parsing in premium mode costs materially more, so cap how many pages
+    # of one document can trigger it before we fall back to the text layer.
+    parse_repair_max_pages: int = 20
+
     # Query
     retrieval_top_k: int = 6
     retrieval_min_score: float = 0.25
