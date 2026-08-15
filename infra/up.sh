@@ -19,6 +19,10 @@ echo "apps         : $WEB_APP  $INGEST_APP  $QUERY_APP"
 
 echo "→ providers"
 for ns in Microsoft.App Microsoft.ContainerRegistry Microsoft.DBforPostgreSQL Microsoft.Storage Microsoft.OperationalInsights; do
+  state="$(az provider show --namespace "$ns" --query registrationState -o tsv 2>/dev/null || true)"
+  if [[ "$state" == "Registered" ]]; then
+    continue
+  fi
   az provider register --namespace "$ns" --wait >/dev/null
 done
 
@@ -76,17 +80,20 @@ if ! az postgres flexible-server show --name "$POSTGRES_SERVER" --resource-group
   fi
 fi
 
+# Azure CLI 2.87+: db --name, firewall --server-name + --name (rule). Older
+# --database-name / --rule-name flags fail with "required: --name / --server-name".
 az postgres flexible-server db create \
   --resource-group "$RESOURCE_GROUP" \
   --server-name "$POSTGRES_SERVER" \
-  --database-name "$POSTGRES_DB" \
+  --name "$POSTGRES_DB" \
   --output none >/dev/null || true
 
 # 0.0.0.0–0.0.0.0 is Azure's "allow Azure services" rule (Container Apps egress).
+# Laptop IP is only for migrate.sh from this machine — not 0.0.0.0/0.
 az postgres flexible-server firewall-rule create \
   --resource-group "$RESOURCE_GROUP" \
-  --name "$POSTGRES_SERVER" \
-  --rule-name AllowAzureServices \
+  --server-name "$POSTGRES_SERVER" \
+  --name AllowAzureServices \
   --start-ip-address 0.0.0.0 \
   --end-ip-address 0.0.0.0 \
   --output none >/dev/null || true
@@ -95,8 +102,8 @@ LAPTOP_IP="$(curl -fsS https://api.ipify.org || true)"
 if [[ -n "${LAPTOP_IP:-}" ]]; then
   az postgres flexible-server firewall-rule create \
     --resource-group "$RESOURCE_GROUP" \
-    --name "$POSTGRES_SERVER" \
-    --rule-name AllowLaptop \
+    --server-name "$POSTGRES_SERVER" \
+    --name AllowLaptop \
     --start-ip-address "$LAPTOP_IP" \
     --end-ip-address "$LAPTOP_IP" \
     --output none >/dev/null || true
@@ -155,8 +162,6 @@ create_or_update_app() {
   local ingress="$2"
   local target_port="$3"
   local min_replicas="$4"
-  shift 4
-  local extra=("$@")
 
   if az containerapp show --name "$name" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
     echo "  reuse $name"
@@ -171,6 +176,7 @@ create_or_update_app() {
   done < <(app_secrets)
 
   echo "  create $name (placeholder image; deploy.sh replaces it)"
+  # No unused "${extra[@]}" — with set -u an empty array aborts the script.
   az containerapp create \
     --name "$name" \
     --resource-group "$RESOURCE_GROUP" \
@@ -184,7 +190,6 @@ create_or_update_app() {
     --registry-server "$ACR_LOGIN_SERVER" \
     --registry-username "$ACR_USER" \
     --registry-password "$ACR_PASS" \
-    "${extra[@]}" \
     --output none
 }
 

@@ -10,7 +10,7 @@ cp infra/azure.env.example infra/azure.env   # new keys, not your laptop .env
 ./infra/deploy.sh
 ```
 
-`up.sh` is the slow, once-only step. After that, a code change is `./infra/deploy.sh` (ACR builds `linux/amd64` — do not build those images on this Mac).
+`up.sh` is the slow, once-only step. Safe to re-run after a partial failure — existing resources are reused. After that, a code change is `./infra/deploy.sh` (ACR builds `linux/amd64` — do not build those images on this Mac).
 
 ## What you put in `azure.env`
 
