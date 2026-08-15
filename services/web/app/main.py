@@ -15,9 +15,12 @@ from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.middleware.sessions import SessionMiddleware
+
+from app import auth
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("web")
@@ -47,6 +50,18 @@ def _voice_for_lang(lang: str | None) -> str:
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+# A browser holding a stale app.js keeps polling and never reacts to the 401 the
+# login gate returns, so the console looks broken instead of asking for a login.
+# StaticFiles still sends an ETag, so revalidating costs a 304.
+NO_CACHE = {"cache-control": "no-cache"}
+
+
+class RevalidatedStatic(StaticFiles):
+    def file_response(self, *args: Any, **kwargs: Any) -> Any:
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["cache-control"] = "no-cache"
+        return resp
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -54,6 +69,7 @@ async def lifespan(app: FastAPI):
     pool to the internal ingestion/query services survives between calls."""
     app.state.http = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
     log.info("web service ready (shared http client initialized)")
+    auth.log_startup_state()
     try:
         yield
     finally:
@@ -61,6 +77,48 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="RAG Web UI", version="0.1.0", lifespan=lifespan)
+
+# Added first so SessionMiddleware ends up outermost: require_login reads
+# request.session, which only exists once SessionMiddleware has run.
+app.middleware("http")(auth.require_login)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=auth.SESSION_SECRET,
+    max_age=auth.SESSION_MAX_AGE,
+    https_only=auth.COOKIE_SECURE,
+    same_site="lax",
+)
+
+
+class LoginBody(BaseModel):
+    username: str = Field(default="", max_length=200)
+    password: str = Field(default="", max_length=500)
+
+
+@app.get("/login")
+async def login_page(request: Request) -> Any:
+    if not auth.auth_enabled() or auth.is_logged_in(request):
+        return RedirectResponse("/", status_code=302)
+    # An explicit route: the StaticFiles mount resolves /login to a directory,
+    # not to login.html.
+    return FileResponse(STATIC_DIR / "login.html", headers=NO_CACHE)
+
+
+@app.post("/api/login")
+async def api_login(body: LoginBody, request: Request) -> JSONResponse:
+    if not auth.auth_enabled():
+        return JSONResponse({"ok": True})
+    if not await auth.check_credentials(body.username, body.password):
+        log.warning("failed login for %r", body.username[:64])
+        return JSONResponse({"error": "wrong username or password"}, status_code=401)
+    auth.sign_in(request)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/logout")
+async def api_logout(request: Request) -> JSONResponse:
+    auth.sign_out(request)
+    return JSONResponse({"ok": True})
 
 
 def _auth_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -377,4 +435,4 @@ def _safe_json(resp: httpx.Response) -> Any:
         return {"error": resp.text or f"upstream returned status {resp.status_code}"}
 
 
-app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+app.mount("/", RevalidatedStatic(directory=str(STATIC_DIR), html=True), name="static")

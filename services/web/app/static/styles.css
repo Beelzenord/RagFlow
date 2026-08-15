@@ -150,6 +150,35 @@ html[data-theme="light"] .theme-label-light {
   display: inline;
 }
 
+.login-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  padding: 24px;
+}
+
+.login-card h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.login-card p.muted {
+  margin: 4px 0 20px 0;
+  font-size: 13px;
+}
+
+.login-card button[type="submit"] {
+  width: 100%;
+}
+
 .grid {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.15fr);
@@ -315,6 +344,7 @@ html[data-theme="light"] .theme-label-light {
 }
 
 input[type="text"],
+input[type="password"],
 input[type="file"],
 select,
 textarea {

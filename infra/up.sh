@@ -180,6 +180,8 @@ create_or_update_app() {
       "embedding-api-key=$EMBEDDING_API_KEY" \
       "llama-cloud-api-key=$LLAMA_CLOUD_API_KEY" \
       "service-api-key=$SERVICE_API_KEY" \
+      "admin-password=$ADMIN_PASSWORD" \
+      "session-secret=$SESSION_SECRET" \
       "acr-password=$ACR_PASS" \
     --registry-server "$ACR_LOGIN_SERVER" \
     --registry-username "$ACR_USER" \

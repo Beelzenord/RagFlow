@@ -61,6 +61,9 @@ require_app_secrets() {
   need EMBEDDING_API_KEY
   need LLAMA_CLOUD_API_KEY
   need SERVICE_API_KEY
+  # The web app has a public FQDN; refuse to ship it without a login gate.
+  need ADMIN_PASSWORD
+  need SESSION_SECRET
 }
 
 acr_creds() {
@@ -103,6 +106,8 @@ apply_secrets() {
       "embedding-api-key=$EMBEDDING_API_KEY" \
       "llama-cloud-api-key=$LLAMA_CLOUD_API_KEY" \
       "service-api-key=$SERVICE_API_KEY" \
+      "admin-password=$ADMIN_PASSWORD" \
+      "session-secret=$SESSION_SECRET" \
       "acr-password=$ACR_PASS" \
     --output none
 }

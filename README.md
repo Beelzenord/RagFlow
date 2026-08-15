@@ -39,7 +39,9 @@ storage/              originals/  markdown/   (bind-mounted into ingestion)
    cp .env.example .env
    ```
    At minimum set: `LLAMA_CLOUD_API_KEY`, `LLM_API_KEY`, `EMBEDDING_API_KEY`,
-   `N8N_ENCRYPTION_KEY`, `SERVICE_API_KEY`.
+   `N8N_ENCRYPTION_KEY`, `SERVICE_API_KEY`. Set `ADMIN_PASSWORD` too if the web
+   console should ask for a login — left empty, it is open to anyone who can
+   reach the port.
 3. Bring up the stack:
    ```bash
    docker compose up -d --build
@@ -48,6 +50,7 @@ storage/              originals/  markdown/   (bind-mounted into ingestion)
    ```bash
    curl http://localhost:8001/healthz
    curl http://localhost:8002/healthz
+   open http://localhost:8080        # web console (login if ADMIN_PASSWORD is set)
    open http://localhost:5678        # n8n UI
    ```
 

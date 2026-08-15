@@ -102,6 +102,10 @@ az containerapp update \
     "QUERY_URL=http://$QUERY_APP" \
     "SERVICE_API_KEY=secretref:service-api-key" \
     "WEB_HTTP_TIMEOUT=120" \
+    "ADMIN_USERNAME=${ADMIN_USERNAME:-admin}" \
+    "ADMIN_PASSWORD=secretref:admin-password" \
+    "SESSION_SECRET=secretref:session-secret" \
+    "SESSION_COOKIE_SECURE=1" \
   --min-replicas 0 \
   --max-replicas 2 \
   --output none
@@ -121,6 +125,8 @@ FQDN="$(az containerapp show --name "$WEB_APP" --resource-group "$RESOURCE_GROUP
 echo
 echo "Deployed $SHA"
 echo "UI: https://$FQDN"
+echo
+echo "Sign in as ${ADMIN_USERNAME:-admin} with the ADMIN_PASSWORD from $ENV_FILE."
 echo
 echo "First boot: the Documents list is empty. That is the new cloud database,"
 echo "not a broken UI. Upload a small PDF, wait for completed/degraded, then ask."

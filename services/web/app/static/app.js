@@ -47,7 +47,17 @@ const els = {
   queueClearBtn: document.getElementById("queue-clear-btn"),
   themeToggle: document.getElementById("theme-toggle"),
   newChatBtn: document.getElementById("new-chat-btn"),
+  logoutBtn: document.getElementById("logout-btn"),
 };
+
+// The session cookie can expire mid-visit, after which every /api call answers
+// 401. Send the tab to the login page instead of painting "HTTP 401" into the
+// docs list, the upload queue and the chat log.
+function bounceIfLoggedOut(status) {
+  if (status !== 401) return false;
+  location.href = "/login";
+  return true;
+}
 
 function loadDocsCache() {
   try {
@@ -82,6 +92,7 @@ function normalizeDoc(d) {
 async function refreshDocs() {
   try {
     const resp = await fetch("/api/documents");
+    if (bounceIfLoggedOut(resp.status)) return;
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     const list = Array.isArray(data?.documents) ? data.documents : [];
@@ -206,6 +217,7 @@ async function deleteDoc(doc, liNode) {
 
   try {
     const resp = await fetch(`/api/documents/${doc.id}`, { method: "DELETE" });
+    if (bounceIfLoggedOut(resp.status)) return;
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
       const msg = data?.detail || data?.error || `HTTP ${resp.status}`;
@@ -235,6 +247,7 @@ function startPolling(docId) {
   const tick = async () => {
     try {
       const resp = await fetch(`/api/documents/${docId}`);
+      if (bounceIfLoggedOut(resp.status)) return;
       if (resp.status === 404) {
         clearInterval(state.pollers.get(docId));
         state.pollers.delete(docId);
@@ -376,6 +389,19 @@ function saveTheme(theme) {
   });
 })();
 
+if (els.logoutBtn) {
+  els.logoutBtn.addEventListener("click", async () => {
+    els.logoutBtn.disabled = true;
+    try {
+      await fetch("/api/logout", { method: "POST" });
+    } catch (err) {
+      console.warn("logout failed", err);
+    }
+    // Land on /login when the gate is on, and back here when it is off.
+    location.href = "/login";
+  });
+}
+
 function setProgress(fraction) {
   const pct = Math.max(0, Math.min(1, fraction)) * 100;
   els.uploadBar.style.width = `${pct.toFixed(1)}%`;
@@ -400,6 +426,7 @@ function uploadWithProgress(formData, onProgress) {
       if (evt.lengthComputable) onProgress(evt.loaded, evt.total);
     };
     xhr.onload = () => {
+      if (bounceIfLoggedOut(xhr.status)) return;
       let body = {};
       try { body = JSON.parse(xhr.responseText || "{}"); } catch { /* ignore */ }
       resolve({ status: xhr.status, body });
@@ -683,6 +710,7 @@ async function runChat(question) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
+    if (bounceIfLoggedOut(resp.status)) return;
     if (!resp.ok || !resp.body) {
       const data = await resp.json().catch(() => ({}));
       const msg = data?.detail || data?.error || `HTTP ${resp.status}`;

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in - RAG Console</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("rag.theme.v1");
+        document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
+      } catch (_) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+</head>
+<body class="login-body">
+  <main class="login-shell">
+    <section class="panel login-card">
+      <h1>RAG Console</h1>
+      <p class="muted">Sign in to upload documents and ask questions.</p>
+      <form id="login-form">
+        <label class="field">
+          <span>Username</span>
+          <input type="text" id="username-input" autocomplete="username" autofocus required />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input type="password" id="password-input" autocomplete="current-password" required />
+        </label>
+        <button type="submit" id="login-btn">Sign in</button>
+        <p class="status" id="login-status" aria-live="polite"></p>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      const form = document.getElementById("login-form");
+      const btn = document.getElementById("login-btn");
+      const status = document.getElementById("login-status");
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        btn.disabled = true;
+        status.className = "status";
+        status.textContent = "Signing in...";
+        try {
+          const resp = await fetch("/api/login", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              username: document.getElementById("username-input").value,
+              password: document.getElementById("password-input").value,
+            }),
+          });
+          if (resp.ok) {
+            location.href = "/";
+            return;
+          }
+          const body = await resp.json().catch(() => ({}));
+          status.className = "status error";
+          status.textContent = body.error || `Sign in failed (HTTP ${resp.status})`;
+        } catch (err) {
+          status.className = "status error";
+          status.textContent = `Sign in failed: ${err.message}`;
+        }
+        btn.disabled = false;
+      });
+    })();
+  </script>
+</body>
+</html>
