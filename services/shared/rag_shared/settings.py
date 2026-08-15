@@ -1,5 +1,7 @@
 from functools import lru_cache
-from pydantic import Field
+from typing import Any, Literal
+from urllib.parse import quote_plus
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +14,10 @@ class Settings(BaseSettings):
     postgres_db: str = "postgres"
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
+    # Flexible Server requires TLS. Local compose Postgres does not, so the
+    # default is "prefer": no SSL unless the server offers it in a way the
+    # driver already handles. Set POSTGRES_SSL=require on Azure.
+    postgres_ssl: Literal["disable", "prefer", "require"] = "prefer"
 
     # LlamaParse
     llama_cloud_api_key: str = ""
@@ -65,10 +71,22 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        # Azure-generated passwords contain @, #, etc.; an unquoted URL
+        # treats the first @ as the host separator and the connection dies.
+        user = quote_plus(self.postgres_user)
+        password = quote_plus(self.postgres_password)
         return (
-            f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
+            f"postgresql+asyncpg://{user}:{password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    @property
+    def database_connect_args(self) -> dict[str, Any]:
+        if self.postgres_ssl == "require":
+            return {"ssl": True}
+        if self.postgres_ssl == "disable":
+            return {"ssl": False}
+        return {}
 
     @property
     def allowed_mime_set(self) -> set[str]:

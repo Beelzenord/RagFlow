@@ -8,6 +8,7 @@ x-python-env: &python-env
   POSTGRES_DB: ${POSTGRES_DB:-postgres}
   POSTGRES_USER: ${POSTGRES_USER:-postgres}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+  POSTGRES_SSL: ${POSTGRES_SSL:-prefer}
   REDIS_HOST: ${REDIS_HOST:-redis}
   REDIS_PORT: ${REDIS_PORT:-6379}
   LLAMA_CLOUD_API_KEY: ${LLAMA_CLOUD_API_KEY}
@@ -121,6 +122,7 @@ services:
     depends_on:
       - ingestion
       - query
+
 
   n8n:
     image: n8nio/n8n:latest

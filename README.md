@@ -148,6 +148,12 @@ export SERVICE_API_KEY=$(grep ^SERVICE_API_KEY .env | cut -d= -f2)
 - ❌ No silent failures — failures land in `documents.error_message` and
   `ingestion_jobs.error_message`, and the document is reprocess-able.
 
+## Azure
+
+First cloud deploy (Container Apps + Flexible Server + Azure Files) is
+documented in [`infra/README.md`](infra/README.md). The Documents list is empty
+on first boot — upload a PDF after `./infra/deploy.sh`, then ask.
+
 ## Production checklist
 
 - [ ] Rotate any API keys ever pasted into a chat or commit.
