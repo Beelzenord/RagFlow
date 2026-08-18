@@ -112,6 +112,7 @@ services:
       INGESTION_URL: http://ingestion:8001
       QUERY_URL: http://query:8002
       SERVICE_API_KEY: ${SERVICE_API_KEY}
+      AUTH_MODE: ${AUTH_MODE:-password}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       SESSION_SECRET: ${SESSION_SECRET:-}

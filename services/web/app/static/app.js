@@ -48,14 +48,20 @@ const els = {
   themeToggle: document.getElementById("theme-toggle"),
   newChatBtn: document.getElementById("new-chat-btn"),
   logoutBtn: document.getElementById("logout-btn"),
+  userBadge: document.getElementById("user-badge"),
 };
 
-// The session cookie can expire mid-visit, after which every /api call answers
-// 401. Send the tab to the login page instead of painting "HTTP 401" into the
-// docs list, the upload queue and the chat log.
+// Where to send the browser when the server stops recognising it. Overwritten
+// by /api/me, because with Microsoft sign-in the destination belongs to the
+// platform ("/.auth/login/aad") rather than to this app.
+let loginUrl = "/login";
+
+// The session can end mid-visit, after which every /api call answers 401. Send
+// the tab to the sign-in page instead of painting "HTTP 401" into the docs
+// list, the upload queue and the chat log.
 function bounceIfLoggedOut(status) {
   if (status !== 401) return false;
-  location.href = "/login";
+  location.href = loginUrl;
   return true;
 }
 
@@ -389,18 +395,43 @@ function saveTheme(theme) {
   });
 })();
 
-if (els.logoutBtn) {
+// The topbar cannot work out who is signed in on its own: with Microsoft
+// sign-in the identity arrives in a request header the page never sees, and
+// signing out has to go through the platform rather than this app.
+async function initSession() {
+  let info = {};
+  try {
+    const resp = await fetch("/api/me");
+    if (resp.ok) info = await resp.json();
+  } catch (err) {
+    console.warn("session lookup failed", err);
+  }
+
+  if (info.login_url) loginUrl = info.login_url;
+
+  if (info.user && els.userBadge) {
+    els.userBadge.textContent = info.user;
+    els.userBadge.hidden = false;
+  }
+
+  // No logout_url means there is no session to end - an open console with
+  // neither a password nor Microsoft sign-in in front of it.
+  if (!els.logoutBtn || !info.logout_url) return;
+  els.logoutBtn.hidden = false;
   els.logoutBtn.addEventListener("click", async () => {
     els.logoutBtn.disabled = true;
-    try {
-      await fetch("/api/logout", { method: "POST" });
-    } catch (err) {
-      console.warn("logout failed", err);
+    if (info.auth_mode !== "entra") {
+      try {
+        await fetch("/api/logout", { method: "POST" });
+      } catch (err) {
+        console.warn("logout failed", err);
+      }
     }
-    // Land on /login when the gate is on, and back here when it is off.
-    location.href = "/login";
+    location.href = info.logout_url;
   });
 }
+
+initSession();
 
 function setProgress(fraction) {
   const pct = Math.max(0, Math.min(1, fraction)) * 100;

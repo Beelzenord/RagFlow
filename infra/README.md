@@ -20,11 +20,26 @@ cp infra/azure.env.example infra/azure.env   # new keys, not your laptop .env
 | `LLAMA_CLOUD_API_KEY` | New LlamaCloud key. No Azure equivalent. |
 | `SERVICE_API_KEY` | `openssl rand -hex 32` — not the local value. |
 | `POSTGRES_PASSWORD` | New. Flexible Server rejects the username `postgres`; keep `POSTGRES_USER=ragadmin`. |
-| `ADMIN_PASSWORD` | The console login. Required — the web app gets a public URL. |
-| `SESSION_SECRET` | `openssl rand -hex 32`. Signs the session cookie; shared by both web replicas. |
+| `AUTH_MODE` | `entra` (Microsoft sign-in) or `password` (the app's own shared login). |
+| `ADMIN_PASSWORD` / `SESSION_SECRET` | Only for `AUTH_MODE=password`. Required in that mode — the web app has a public URL. |
 | `LOCATION` | `swedencentral`. If a SKU is missing, set `westeurope` and re-run `up.sh`. |
 
 Leave `ELEVENLABS_API_KEY` unset. Do not copy n8n or Redis variables.
+
+## Sign-in (`AUTH_MODE=entra`)
+
+Container Apps authentication ("Easy Auth") signs people in with their work account before a request reaches the container. Enable it on the **web** app only, once, in the portal:
+
+1. Container App > Settings > **Authentication** > Add identity provider > **Microsoft**.
+2. Set unauthenticated requests to **Redirect to login page**, so visitors get the Microsoft prompt instead of a bare redirect.
+3. In Entra > Enterprise applications > the new app > Properties, set **Assignment required = Yes**.
+4. Users and groups > assign your access group (e.g. `RAG Console Users`).
+
+Access is then a group membership change. `deploy.sh` checks Easy Auth is enabled before it builds anything and refuses to deploy `entra` mode without it, so the app cannot end up public by accident.
+
+The app also rejects any request that arrives without the platform's principal header, which means a mistaken "allow unauthenticated" setting fails closed rather than publishing the corpus. That header is trustworthy only because Easy Auth strips client-supplied copies — which is why `AUTH_MODE=entra` must never be used locally.
+
+`ADMIN_PASSWORD` is ignored in this mode, and `deploy.sh` removes it from the web app so nobody meets two login screens. Local compose keeps the password gate.
 
 ## Local vs Azure env (same images)
 
@@ -35,13 +50,14 @@ Leave `ELEVENLABS_API_KEY` unset. Do not copy n8n or Redis variables.
 | `INGESTION_URL` | `http://ingestion:8001` | `http://<prefix>-ingestion` (no port — Container Apps ingress) |
 | `QUERY_URL` | `http://query:8002` | `http://<prefix>-query` |
 | `STORAGE_DIR` | `/data/storage` | `/data/storage` on Azure Files, ingestion only |
+| `AUTH_MODE` | `password` | `entra` (Easy Auth in front) |
 
 Using `:8001` / `:8002` on Azure is how every UI action 502s.
 
 ## First boot — prove it is not an empty shell
 
 1. Open the URL `deploy.sh` prints (`https://<web-app>.<env>.<region>.azurecontainerapps.io`).
-2. You land on `/login`. Sign in as `admin` with `ADMIN_PASSWORD`.
+2. You get the Microsoft prompt and sign in with your work account. The topbar then shows your address; `AUTH_MODE=password` shows the app's own form instead.
 3. **Documents list is empty.** That is the new cloud database, not a broken UI.
 4. Upload a **small** PDF. Status should move `uploaded` → `processing` → `completed` or `degraded`. A 31-page paper can take minutes (LlamaParse is still outbound).
 5. Ask a question. Tokens should stream. “Show source details” should list the file, a page, and `found by vector|keyword|both`.
@@ -52,9 +68,12 @@ If the UI loads but every action fails:
 - web logs `ingestion service unreachable` → `INGESTION_URL` still has a port, or ingress is HTTPS-only between apps
 - ingestion/query logs `ssl` / `password authentication` → `POSTGRES_SSL` is not `require`, or the password was not URL-safe (the app quotes it; the env value must still be the real password)
 - upload 500 immediately → `migrate.sh` was skipped (`vector` / `document_chunks` missing)
+- every page redirects to `/.auth/login/aad` in a loop → Easy Auth is enabled but not returning a principal header (check the identity provider is Microsoft and the token store is on)
 
-The login is one shared account, not identity — it gates the browser only. `ingestion` and `query` stay internal and keep their own `x-api-key` check. When Entra sits in front later, this gate becomes redundant.
+Sign-in gates the browser only. `ingestion` and `query` stay internal and keep their own `x-api-key` check.
+
+Everyone who can sign in still sees the same corpus: Entra decides *who gets in*, not which documents they may read. Per-group document scoping is a separate change.
 
 ## What these scripts do not do
 
-They do not apply `03`/`04` (already in `02` on a fresh database), do not copy your local corpus, do not create n8n/Redis/Azure OpenAI, and do not add Entra or GitHub Actions.
+They do not apply `03`/`04` (already in `02` on a fresh database), do not copy your local corpus, do not create n8n/Redis/Azure OpenAI, and do not add GitHub Actions. They do not create the Entra app registration or the access group either — that part is the portal steps above; the scripts only verify Easy Auth is on.

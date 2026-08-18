@@ -164,6 +164,12 @@ create_or_update_app() {
     return
   fi
 
+  local secrets=()
+  local line
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && secrets+=("$line")
+  done < <(app_secrets)
+
   echo "  create $name (placeholder image; deploy.sh replaces it)"
   az containerapp create \
     --name "$name" \
@@ -174,15 +180,7 @@ create_or_update_app() {
     --target-port "$target_port" \
     --min-replicas "$min_replicas" \
     --max-replicas 2 \
-    --secrets \
-      "postgres-password=$POSTGRES_PASSWORD" \
-      "llm-api-key=$LLM_API_KEY" \
-      "embedding-api-key=$EMBEDDING_API_KEY" \
-      "llama-cloud-api-key=$LLAMA_CLOUD_API_KEY" \
-      "service-api-key=$SERVICE_API_KEY" \
-      "admin-password=$ADMIN_PASSWORD" \
-      "session-secret=$SESSION_SECRET" \
-      "acr-password=$ACR_PASS" \
+    --secrets "${secrets[@]}" \
     --registry-server "$ACR_LOGIN_SERVER" \
     --registry-username "$ACR_USER" \
     --registry-password "$ACR_PASS" \
@@ -208,7 +206,13 @@ done
 echo
 echo "Resources are up. Next:"
 echo "  ./infra/migrate.sh    # CREATE EXTENSION + schema on a fresh database"
+if [[ "$AUTH_MODE" == "entra" ]]; then
+  echo "  enable Microsoft sign-in on $WEB_APP before deploying:"
+  echo "    portal: Container App > Settings > Authentication > Add identity provider > Microsoft"
+  echo "    require assignment on the enterprise app, then assign your access group"
+fi
 echo "  ./infra/deploy.sh     # build linux/amd64 images and point the apps at them"
 echo
 echo "Postgres host : $POSTGRES_FQDN"
 echo "Database      : $POSTGRES_DB"
+echo "Auth mode     : $AUTH_MODE"

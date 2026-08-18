@@ -95,8 +95,29 @@ class LoginBody(BaseModel):
     password: str = Field(default="", max_length=500)
 
 
+@app.get("/api/me")
+async def api_me(request: Request) -> JSONResponse:
+    """Who the browser is talking as, and where to send it to sign in or out.
+
+    The UI cannot work this out for itself: in entra mode the identity arrives
+    in a header the page never sees, and signing out has to go through the
+    platform rather than this app.
+    """
+    return JSONResponse(
+        {
+            "user": auth.current_user(request),
+            "auth_mode": auth.describe_mode(),
+            "login_url": auth.login_url(),
+            "logout_url": auth.logout_url(),
+        }
+    )
+
+
 @app.get("/login")
 async def login_page(request: Request) -> Any:
+    # In entra mode the platform owns sign-in, so this app has no login form.
+    if auth.entra_mode():
+        raise HTTPException(404, "sign-in is handled by Microsoft Entra")
     if not auth.auth_enabled() or auth.is_logged_in(request):
         return RedirectResponse("/", status_code=302)
     # An explicit route: the StaticFiles mount resolves /login to a directory,
@@ -106,6 +127,8 @@ async def login_page(request: Request) -> Any:
 
 @app.post("/api/login")
 async def api_login(body: LoginBody, request: Request) -> JSONResponse:
+    if auth.entra_mode():
+        raise HTTPException(404, "sign-in is handled by Microsoft Entra")
     if not auth.auth_enabled():
         return JSONResponse({"ok": True})
     if not await auth.check_credentials(body.username, body.password):

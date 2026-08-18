@@ -7,9 +7,12 @@ load_azure_env
 require_app_secrets
 need_cmd git
 acr_creds
+# Before the builds, so a missing Easy Auth setup fails in seconds rather than
+# after three container images.
+require_easy_auth
 
 SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
-echo "deploying $SHA to $RESOURCE_GROUP"
+echo "deploying $SHA to $RESOURCE_GROUP  (auth: $AUTH_MODE)"
 
 build() {
   local image="$1"
@@ -93,22 +96,40 @@ rm -f "$tmp"
 echo "→ update $WEB_APP"
 set_registry "$WEB_APP"
 apply_secrets "$WEB_APP"
+web_env=(
+  "INGESTION_URL=http://$INGEST_APP"
+  "QUERY_URL=http://$QUERY_APP"
+  "SERVICE_API_KEY=secretref:service-api-key"
+  "WEB_HTTP_TIMEOUT=120"
+  "AUTH_MODE=$AUTH_MODE"
+  "SESSION_COOKIE_SECURE=1"
+)
+if [[ "$AUTH_MODE" == "password" ]]; then
+  web_env+=(
+    "ADMIN_USERNAME=${ADMIN_USERNAME:-admin}"
+    "ADMIN_PASSWORD=secretref:admin-password"
+    "SESSION_SECRET=secretref:session-secret"
+  )
+fi
+
 az containerapp update \
   --name "$WEB_APP" \
   --resource-group "$RESOURCE_GROUP" \
   --image "$ACR_LOGIN_SERVER/web:$SHA" \
-  --set-env-vars \
-    "INGESTION_URL=http://$INGEST_APP" \
-    "QUERY_URL=http://$QUERY_APP" \
-    "SERVICE_API_KEY=secretref:service-api-key" \
-    "WEB_HTTP_TIMEOUT=120" \
-    "ADMIN_USERNAME=${ADMIN_USERNAME:-admin}" \
-    "ADMIN_PASSWORD=secretref:admin-password" \
-    "SESSION_SECRET=secretref:session-secret" \
-    "SESSION_COOKIE_SECURE=1" \
+  --set-env-vars "${web_env[@]}" \
   --min-replicas 0 \
   --max-replicas 2 \
   --output none
+
+if [[ "$AUTH_MODE" == "entra" ]]; then
+  # A left-over password from an earlier deploy would put a second login behind
+  # the Microsoft one. --set-env-vars merges, so it has to be removed by name.
+  az containerapp update \
+    --name "$WEB_APP" \
+    --resource-group "$RESOURCE_GROUP" \
+    --remove-env-vars ADMIN_PASSWORD ADMIN_USERNAME \
+    --output none 2>/dev/null || true
+fi
 az containerapp ingress update \
   --name "$WEB_APP" \
   --resource-group "$RESOURCE_GROUP" \
@@ -126,7 +147,12 @@ echo
 echo "Deployed $SHA"
 echo "UI: https://$FQDN"
 echo
-echo "Sign in as ${ADMIN_USERNAME:-admin} with the ADMIN_PASSWORD from $ENV_FILE."
+if [[ "$AUTH_MODE" == "entra" ]]; then
+  echo "Sign in with your work account. Access is whoever is assigned to the"
+  echo "enterprise application in Entra; the topbar shows who you are."
+else
+  echo "Sign in as ${ADMIN_USERNAME:-admin} with the ADMIN_PASSWORD from $ENV_FILE."
+fi
 echo
 echo "First boot: the Documents list is empty. That is the new cloud database,"
 echo "not a broken UI. Upload a small PDF, wait for completed/degraded, then ask."

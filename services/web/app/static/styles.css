@@ -150,6 +150,16 @@ html[data-theme="light"] .theme-label-light {
   display: inline;
 }
 
+.user-badge {
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .login-shell {
   min-height: 100vh;
   display: flex;

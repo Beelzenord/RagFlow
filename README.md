@@ -41,7 +41,8 @@ storage/              originals/  markdown/   (bind-mounted into ingestion)
    At minimum set: `LLAMA_CLOUD_API_KEY`, `LLM_API_KEY`, `EMBEDDING_API_KEY`,
    `N8N_ENCRYPTION_KEY`, `SERVICE_API_KEY`. Set `ADMIN_PASSWORD` too if the web
    console should ask for a login — left empty, it is open to anyone who can
-   reach the port.
+   reach the port. (On Azure the login is Microsoft Entra instead; see
+   [infra/README.md](infra/README.md).)
 3. Bring up the stack:
    ```bash
    docker compose up -d --build
