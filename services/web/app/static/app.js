@@ -23,6 +23,9 @@ const state = {
   queueBusy: false,
   nextQid: 1,
   turns: [],
+  streaming: false,
+  // Set while an answer is in flight so the send button can cancel it.
+  abort: null,
 };
 
 const els = {
@@ -688,7 +691,9 @@ async function runChat(question) {
   const history = state.turns.slice(-MAX_HISTORY_TURNS);
 
   appendMessage("user", question);
-  els.askBtn.disabled = true;
+  state.streaming = true;
+  state.abort = new AbortController();
+  updateSendBtn();
 
   const bubble = appendMessage("bot", "");
   const answerNode = document.createElement("div");
@@ -740,6 +745,7 @@ async function runChat(question) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal: state.abort.signal,
     });
     if (bounceIfLoggedOut(resp.status)) return;
     if (!resp.ok || !resp.body) {
@@ -771,16 +777,30 @@ async function runChat(question) {
       try { handleEvent(JSON.parse(buf)); } catch (_) { /* ignore */ }
     }
   } catch (err) {
-    bubble.classList.add("error");
-    answerNode.textContent = `Query failed: ${err.message}`;
+    if (err.name === "AbortError") {
+      // Stopping is a decision, not a failure, so whatever already arrived
+      // stands as the answer and counts as context for the next turn.
+      if (firstDeltaSeen) {
+        answerNode.textContent = stripInlineCitations(answerNode.textContent);
+        answered = true;
+      } else {
+        answerNode.textContent = "(stopped)";
+      }
+    } else {
+      bubble.classList.add("error");
+      answerNode.textContent = `Query failed: ${err.message}`;
+    }
   } finally {
-    els.askBtn.disabled = false;
+    state.streaming = false;
+    state.abort = null;
+    updateSendBtn();
     // Only successful exchanges become context - errors, empty answers and
     // "nothing found" replies would just be noise in the next rewrite.
     if (answered) {
       recordTurn("user", question);
       recordTurn("assistant", answerNode.textContent);
     }
+    els.questionInput.focus();
   }
 }
 
@@ -798,6 +818,8 @@ function resetChat() {
   state.turns = [];
   els.chatLog.innerHTML = "";
   updateNewChatBtn();
+  autoGrowInput();
+  updateSendBtn();
   els.questionInput.focus();
 }
 
@@ -812,11 +834,52 @@ if (els.newChatBtn) {
 
 els.chatForm.addEventListener("submit", (e) => {
   e.preventDefault();
+  if (state.streaming) return;
   const question = els.questionInput.value.trim();
   if (!question) return;
   els.questionInput.value = "";
+  autoGrowInput();
+  updateSendBtn();
   runChat(question);
 });
+
+// The send button is the form's submit control, so while an answer is streaming
+// its click has to be caught before the form ever sees it.
+els.askBtn.addEventListener("click", (e) => {
+  if (!state.streaming) return;
+  e.preventDefault();
+  state.abort?.abort();
+});
+
+els.questionInput.addEventListener("input", () => {
+  autoGrowInput();
+  updateSendBtn();
+});
+
+els.questionInput.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+  // Enter is also how an IME accepts the current candidate, which is not a send.
+  if (e.isComposing) return;
+  e.preventDefault();
+  if (state.streaming) return;
+  els.chatForm.requestSubmit();
+});
+
+function autoGrowInput() {
+  // Collapse first, so the field shrinks again after a long question is sent.
+  const input = els.questionInput;
+  input.style.height = "auto";
+  input.style.height = `${input.scrollHeight}px`;
+}
+
+function updateSendBtn() {
+  const busy = state.streaming;
+  els.chatForm.classList.toggle("is-streaming", busy);
+  els.askBtn.disabled = !busy && !els.questionInput.value.trim();
+  els.askBtn.setAttribute("aria-label", busy ? "Stop generating" : "Send");
+}
+
+updateSendBtn();
 
 function appendMessage(role, text) {
   const div = document.createElement("div");

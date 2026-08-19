@@ -99,9 +99,18 @@
       </div>
       <div id="chat-log" class="chat-log" aria-live="polite"></div>
       <form id="chat-form" class="chat-form">
-        <textarea id="question-input" rows="2" placeholder="Ask a question about the indexed documents..." required></textarea>
-        <button type="submit" id="ask-btn">Ask</button>
+        <textarea id="question-input" rows="1" placeholder="Ask a question about the indexed documents..."></textarea>
+        <button type="submit" id="ask-btn" class="send-btn" aria-label="Send">
+          <svg class="icon-send" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 5v14M12 5l-6 6M12 5l6 6" fill="none" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <svg class="icon-stop" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/>
+          </svg>
+        </button>
       </form>
+      <p class="composer-hint">Enter to send, Shift+Enter for a new line</p>
     </section>
   </main>
 
