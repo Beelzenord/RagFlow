@@ -1,7 +1,8 @@
 from __future__ import annotations
+import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import (
@@ -15,15 +16,23 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import text
+from starlette.concurrency import run_in_threadpool
 
 from rag_shared.db import session_scope
 from rag_shared.security import require_service_key
 from rag_shared.settings import settings
 
+from .evidence import render_evidence
 from .pipeline import run_ingestion
-from .storage import resolve_storage_file, save_original
+from .storage import (
+    evidence_path,
+    purge_evidence,
+    resolve_storage_file,
+    save_original,
+    write_atomic,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("ingestion")
@@ -130,6 +139,79 @@ async def get_document_file(document_id: UUID) -> FileResponse:
     )
 
 
+# Serialises the CPU-bound renders. A browser requests a whole strip of tiles
+# at once, and this service also has parsing work to get on with.
+_render_slots = asyncio.Semaphore(settings.evidence_max_concurrency)
+
+# Keyed by an immutable chunk id, so a cached tile is never stale: re-ingesting
+# mints new chunk ids and the old URLs stop being referenced at all.
+_EVIDENCE_CACHE_CONTROL = "private, max-age=604800"
+
+
+@app.get("/chunks/{chunk_id}/evidence", dependencies=[Depends(require_service_key)])
+async def get_chunk_evidence(
+    chunk_id: UUID,
+    variant: Literal["page", "crop"] = Query(default="page"),
+) -> Response:
+    """PNG of the page this chunk came from, with its text highlighted.
+
+    404 covers every "no picture available" case - disabled, not a PDF, no
+    stored original, an unlocatable page - because the caller's only sensible
+    response to all of them is the same: show no tile.
+    """
+    if not settings.evidence_enabled:
+        raise HTTPException(404, "evidence images are disabled")
+
+    async with session_scope() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT c.document_id, c.page_number, c.content, "
+                    "       d.storage_path, d.file_type "
+                    "FROM document_chunks c JOIN documents d ON d.id = c.document_id "
+                    "WHERE c.id = :id"
+                ),
+                {"id": str(chunk_id)},
+            )
+        ).mappings().first()
+    if not row:
+        raise HTTPException(404, "chunk not found")
+
+    document_id = str(row["document_id"])
+    cached = evidence_path(document_id, str(chunk_id), variant)
+    if not cached.is_file():
+        source = resolve_storage_file(row["storage_path"] or "")
+        if source is None:
+            raise HTTPException(404, "original file not found on disk")
+
+        async with _render_slots:
+            png = await run_in_threadpool(
+                render_evidence,
+                str(source),
+                row["page_number"] or 1,
+                row["content"] or "",
+                variant,
+                row["file_type"] or "",
+            )
+        if png is None:
+            raise HTTPException(404, "no evidence image available for this chunk")
+        write_atomic(cached, png)
+        # A failed cache write is not fatal; serve this render from memory and
+        # let the next request try again.
+        if not cached.is_file():
+            return Response(
+                content=png,
+                media_type="image/png",
+                headers={"cache-control": _EVIDENCE_CACHE_CONTROL},
+            )
+
+    return FileResponse(
+        path=cached,
+        media_type="image/png",
+        headers={"cache-control": _EVIDENCE_CACHE_CONTROL},
+    )
+
+
 @app.get("/documents", dependencies=[Depends(require_service_key)])
 async def list_documents(
     collection: str | None = Query(default=None),
@@ -168,6 +250,7 @@ def _delete_files(document_id: str, storage_path: str | None) -> None:
             p.unlink(missing_ok=True)
         except OSError as exc:
             log.warning("could not unlink %s: %s", p, exc)
+    purge_evidence(document_id)
 
 
 @app.delete("/documents/{document_id}", dependencies=[Depends(require_service_key)])

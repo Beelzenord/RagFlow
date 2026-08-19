@@ -22,11 +22,12 @@ Client → n8n ──┬─▶ ingestion-svc (FastAPI)  → LlamaParse → chunk
 ```
 db/migrations/        SQL run on first DB init
 services/shared/      rag_shared package (settings, db, embeddings, llm, chunking)
-services/ingestion/   FastAPI: /ingest, /documents/{id}, /documents/{id}/reprocess
+services/ingestion/   FastAPI: /ingest, /documents/{id}, /documents/{id}/reprocess,
+                      /chunks/{id}/evidence
 services/query/       FastAPI: /query
 n8n/workflows/        Importable JSON workflows
 scripts/smoke_test.sh End-to-end test
-storage/              originals/  markdown/   (bind-mounted into ingestion)
+storage/              originals/  markdown/  evidence/   (bind-mounted into ingestion)
 ```
 
 ## First-time setup
@@ -100,11 +101,31 @@ Response:
 {
   "answer": "The brochure lists three tiers… [1][2]",
   "citations": [
-    {"n": 1, "document_id": "…", "filename": "brochure.pdf", "page_number": 3, "heading": "Pricing", "score": 0.83},
+    {"n": 1, "document_id": "…", "chunk_id": "…", "filename": "brochure.pdf", "page_number": 3, "heading": "Pricing", "score": 0.83},
     ...
   ]
 }
 ```
+
+## Citation evidence images
+
+Every citation carries a `chunk_id`, which the ingestion service turns into a
+picture of the page the passage came from, with the passage itself highlighted:
+
+```bash
+curl -H "x-api-key: $SERVICE_API_KEY" \
+     "http://localhost:8001/chunks/<chunk_id>/evidence?variant=crop" -o evidence.png
+```
+
+`variant=crop` returns a full-width band around the match (what the console
+shows as a thumbnail); `variant=page` returns the whole page. Renders are cached
+under `storage/evidence/<document_id>/` and dropped when the document is deleted
+or reprocessed.
+
+The passage is located by searching the PDF's own text layer, so a page whose
+text is baked into an image renders without a highlight, and a chunk with no
+locatable text answers 404 — the console then simply shows no thumbnail. Set
+`EVIDENCE_ENABLED=false` to switch the feature off.
 
 ## n8n workflows
 

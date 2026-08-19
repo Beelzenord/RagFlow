@@ -53,6 +53,18 @@ class Settings(BaseSettings):
     # of one document can trigger it before we fall back to the text layer.
     parse_repair_max_pages: int = 20
 
+    # Evidence images: the rendered page behind a citation, with the cited text
+    # highlighted. Rendered on demand and cached under storage_dir, so scale
+    # trades legibility against render time and disk. max_dim caps the output of
+    # an outsized page (plans, posters) that scale alone would let explode.
+    evidence_enabled: bool = True
+    evidence_scale: float = 2.0
+    evidence_max_dim: int = 2400
+    # Rendering is CPU-bound, and a browser asks for a whole strip of tiles at
+    # once. Bound how many of those run at a time so a burst cannot starve the
+    # ingestion service of the CPU it needs for parsing.
+    evidence_max_concurrency: int = 2
+
     # Query. Each retriever contributes retrieval_pool_size candidates, which
     # are fused and cut to retrieval_top_k. min_score gates the vector side
     # only - lexical hits are already filtered by matching the query terms.

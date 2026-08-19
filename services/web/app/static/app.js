@@ -12,6 +12,9 @@ const REFRESH_MS = 5000;
 const MAX_HISTORY_TURNS = 6;
 const MAX_TURN_CHARS = 1500;
 const POLL_MS = 2000;
+// Evidence thumbnails per answer. Enough to show the answer rests on more than
+// one place in the corpus, few enough to stay a strip rather than a gallery.
+const MAX_EVIDENCE_TILES = 4;
 
 const state = {
   docs: loadDocsCache(),
@@ -49,6 +52,11 @@ const els = {
   newChatBtn: document.getElementById("new-chat-btn"),
   logoutBtn: document.getElementById("logout-btn"),
   userBadge: document.getElementById("user-badge"),
+  evidenceModal: document.getElementById("evidence-modal"),
+  evidenceImage: document.getElementById("evidence-full"),
+  evidenceCaption: document.getElementById("evidence-caption"),
+  evidenceDownload: document.getElementById("evidence-download"),
+  evidenceClose: document.getElementById("evidence-close"),
 };
 
 // Where to send the browser when the server stops recognising it. Overwritten
@@ -872,8 +880,107 @@ function renderSourceDocs(list) {
 
   if (!links.childNodes.length) return document.createDocumentFragment();
   wrap.appendChild(links);
+  wrap.appendChild(renderEvidence(list));
   return wrap;
 }
+
+function evidenceUrl(chunkId, variant) {
+  return `/api/chunks/${encodeURIComponent(chunkId)}/evidence?variant=${variant}`;
+}
+
+function renderEvidence(list) {
+  /** Thumbnails of the cited pages, each with the quoted passage highlighted.
+   * Deliberately outside the "Show source details" toggle: scores are for
+   * debugging retrieval, but seeing the page is how a reader checks an answer.
+   */
+  const strip = document.createElement("div");
+  strip.className = "evidence-strip";
+
+  const seen = new Set();
+  for (const c of list) {
+    if (!c.chunk_id) continue;
+    // Two chunks from one page would render near-identical tiles.
+    const key = `${c.document_id}:${c.page_number || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    strip.appendChild(evidenceTile(c));
+    if (seen.size >= MAX_EVIDENCE_TILES) break;
+  }
+
+  if (!strip.childNodes.length) return document.createDocumentFragment();
+  return strip;
+}
+
+function evidenceTile(c) {
+  const name = c.filename || "document";
+  const where = c.page_number ? `page ${c.page_number}` : "page";
+
+  const tile = document.createElement("button");
+  tile.type = "button";
+  tile.className = "evidence-tile";
+  tile.title = `${name} - ${where}`;
+
+  const img = document.createElement("img");
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.alt = `${name}, ${where}`;
+  img.src = evidenceUrl(c.chunk_id, "crop");
+  // No picture for this passage - not a PDF, text baked into an image, or the
+  // session expired. Drop the tile instead of leaving a broken frame: an <img>
+  // request never reaches the fetch wrapper, so no 401 handling runs for it.
+  img.addEventListener("error", () => tile.remove());
+
+  const caption = document.createElement("span");
+  caption.className = "evidence-tile-caption";
+  caption.textContent = c.page_number ? `p.${c.page_number}` : name;
+
+  tile.appendChild(img);
+  tile.appendChild(caption);
+  tile.addEventListener("click", () => openEvidence(c));
+  return tile;
+}
+
+let evidenceOpener = null;
+
+function openEvidence(c) {
+  if (!els.evidenceModal) return;
+  const name = c.filename || "document";
+  const where = c.page_number ? `page ${c.page_number}` : "";
+
+  evidenceOpener = document.activeElement;
+  els.evidenceCaption.textContent = [name, where].filter(Boolean).join(" - ");
+  els.evidenceImage.alt = `${name}${where ? `, ${where}` : ""}`;
+  els.evidenceImage.src = evidenceUrl(c.chunk_id, "page");
+  if (c.document_id) {
+    els.evidenceDownload.href = `/api/documents/${encodeURIComponent(c.document_id)}/file`;
+    els.evidenceDownload.download = name;
+    els.evidenceDownload.hidden = false;
+  } else {
+    els.evidenceDownload.hidden = true;
+  }
+  els.evidenceModal.hidden = false;
+  els.evidenceClose.focus();
+}
+
+function closeEvidence() {
+  if (!els.evidenceModal || els.evidenceModal.hidden) return;
+  els.evidenceModal.hidden = true;
+  // Drop the image so a large page render is not held in memory, and so
+  // reopening the same tile starts from a clean load.
+  els.evidenceImage.removeAttribute("src");
+  if (evidenceOpener && document.contains(evidenceOpener)) evidenceOpener.focus();
+  evidenceOpener = null;
+}
+
+(function initEvidenceModal() {
+  if (!els.evidenceModal) return;
+  for (const el of els.evidenceModal.querySelectorAll("[data-evidence-close]")) {
+    el.addEventListener("click", closeEvidence);
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeEvidence();
+  });
+})();
 
 function renderCitations(list) {
   /** Optional detail rows (page, heading, score) gated by "Show source details". */

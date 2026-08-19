@@ -10,7 +10,7 @@ from rag_shared.db import session_scope
 from rag_shared.embeddings import EmbeddingClient
 from rag_shared.chunking import chunk_markdown
 from .parser import parse_to_markdown
-from .storage import save_markdown
+from .storage import purge_evidence, save_markdown
 
 log = logging.getLogger(__name__)
 
@@ -102,6 +102,9 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
                 text("DELETE FROM document_chunks WHERE document_id = :d"),
                 {"d": document_id},
             )
+            # Cached evidence images are keyed by chunk id, so the old ones are
+            # unreachable from here on; remove them rather than leak the disk.
+            purge_evidence(document_id)
             await session.execute(
                 text(
                     "UPDATE documents SET markdown_text = :t, markdown_storage_path = :p, "

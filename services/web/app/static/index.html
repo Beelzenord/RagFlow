@@ -104,6 +104,19 @@
     </section>
   </main>
 
+  <!-- One dialog reused by every answer: the tiles only swap its image. -->
+  <div id="evidence-modal" class="evidence-modal" hidden>
+    <div class="evidence-backdrop" data-evidence-close></div>
+    <div class="evidence-dialog" role="dialog" aria-modal="true" aria-labelledby="evidence-caption">
+      <div class="evidence-bar">
+        <span id="evidence-caption" class="evidence-caption"></span>
+        <a id="evidence-download" class="btn-secondary" download>Download original</a>
+        <button type="button" id="evidence-close" class="btn-secondary" data-evidence-close>Close</button>
+      </div>
+      <img id="evidence-full" class="evidence-full" alt="" />
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>

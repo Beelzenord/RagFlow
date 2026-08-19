@@ -10,6 +10,10 @@ httpx==0.27.2
 tiktoken==0.7.0
 llama-parse==0.5.7
 llama-index-core==0.11.14
-# Reads the PDF text layer locally to verify what LlamaParse returns.
+# Reads the PDF text layer locally to verify what LlamaParse returns, and
+# renders pages for citation evidence images.
 # pypdfium2 is BSD/Apache; PyMuPDF would be AGPL, which we don't want here.
 pypdfium2==5.12.1
+# Draws the highlight onto rendered pages and encodes the PNG. Arrives
+# transitively with llama-index too, but we import it directly, so pin it.
+Pillow==12.3.0

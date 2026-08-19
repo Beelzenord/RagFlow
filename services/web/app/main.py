@@ -15,7 +15,13 @@ from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -277,6 +283,44 @@ async def api_document_file(document_id: UUID, request: Request) -> StreamingRes
             await upstream.aclose()
 
     return StreamingResponse(stream_body(), media_type=media_type, headers=out_headers)
+
+
+@app.get("/api/chunks/{chunk_id}/evidence")
+async def api_chunk_evidence(
+    chunk_id: UUID,
+    request: Request,
+    variant: Literal["page", "crop"] = "page",
+) -> Response:
+    """Proxy the rendered page image behind a citation.
+
+    Buffered rather than streamed: these are small PNGs that ingestion has
+    already materialised on disk, so there is nothing to gain from a generator.
+    Upstream's 404 for "no image available" is passed through unchanged, since
+    the page treats it as "draw no tile".
+    """
+    client: httpx.AsyncClient = request.app.state.http
+    try:
+        upstream = await client.get(
+            f"{INGESTION_URL}/chunks/{chunk_id}/evidence",
+            params={"variant": variant},
+            headers=_auth_headers(),
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
+
+    if upstream.status_code >= 400:
+        msg = upstream.text[:500] or f"HTTP {upstream.status_code}"
+        raise HTTPException(upstream.status_code, msg)
+
+    headers = {}
+    cc = upstream.headers.get("cache-control")
+    if cc:
+        headers["cache-control"] = cc
+    return Response(
+        content=upstream.content,
+        media_type=upstream.headers.get("content-type") or "image/png",
+        headers=headers,
+    )
 
 
 class ChatTurn(BaseModel):

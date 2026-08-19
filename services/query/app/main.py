@@ -153,6 +153,9 @@ async def _rewrite_question(req: QueryRequest, llm: LLMClient) -> str:
 class Citation(BaseModel):
     n: int
     document_id: str
+    # Identifies the exact passage, which is what the UI needs to ask for a
+    # page image with this chunk's text highlighted.
+    chunk_id: str
     filename: str
     page_number: int | None
     heading: str | None
@@ -371,6 +374,7 @@ async def _retrieve_and_format(
             Citation(
                 n=i,
                 document_id=str(r["document_id"]),
+                chunk_id=str(r["chunk_id"]),
                 filename=r["original_filename"],
                 page_number=r["page_number"],
                 heading=r["heading"],

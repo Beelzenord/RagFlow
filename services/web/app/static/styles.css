@@ -616,6 +616,125 @@ button:disabled {
   filter: brightness(1.05);
 }
 
+/* Evidence: the cited page, with the quoted passage highlighted. Lives inside
+   .source-docs so it stays visible when source details are hidden. */
+.evidence-strip {
+  /* Grid rather than fixed-width flex items: the chat column is narrow enough
+     that a fixed tile width overflows by a few pixels and drops every tile
+     onto its own row. */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.evidence-tile {
+  padding: 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: zoom-in;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.evidence-tile:hover,
+.evidence-tile:focus-visible {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.evidence-tile img {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* Matches the crop the service produces, so the whole band is shown and the
+     highlight cannot be cropped out of the frame. */
+  aspect-ratio: 2.2;
+  object-fit: cover;
+  background: #fff;
+}
+
+.evidence-tile-caption {
+  padding: 3px 6px;
+  font-size: 11px;
+  color: var(--muted);
+  border-top: 1px solid var(--panel-border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.evidence-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.evidence-modal[hidden] {
+  display: none;
+}
+
+.evidence-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+}
+
+.evidence-dialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* Hugs the page image: pages are portrait, so a fixed-width dialog would
+     letterbox them into a fraction of the space available. */
+  width: fit-content;
+  max-width: min(920px, 100%);
+  max-height: 100%;
+  padding: 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+.evidence-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.evidence-caption {
+  flex: 1;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-full {
+  /* Sized by height so the page fills the window vertically, with width left
+     to follow the page's own proportions. The subtraction covers the modal
+     padding, the dialog padding and the caption bar above. */
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: calc(100vh - 150px);
+  /* Without this the column flex parent stretches the element to full width
+     and the page ends up letterboxed inside its own box. */
+  align-self: center;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #fff;
+}
+
 .citations {
   margin-top: 8px;
   padding-top: 8px;
