@@ -9,6 +9,7 @@
 infra/azure.env
 
 storage
+assets
 **/*.pdf
 
 n8n

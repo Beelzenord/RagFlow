@@ -63,10 +63,26 @@ html, body {
 
 .topbar-brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 16px;
   flex: 1;
   min-width: 0;
+}
+
+.brand-logo {
+  display: block;
+  flex-shrink: 0;
+  width: 148px;
+  height: 32px;
+  background-color: var(--text);
+  -webkit-mask: url("/logo.svg") center / contain no-repeat;
+  mask: url("/logo.svg") center / contain no-repeat;
+}
+
+.brand-logo:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 
 .topbar h1 {

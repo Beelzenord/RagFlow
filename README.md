@@ -26,7 +26,8 @@ services/ingestion/   FastAPI: /ingest, /documents/{id}, /documents/{id}/reproce
 services/query/       FastAPI: /query
 n8n/workflows/        Importable JSON workflows
 scripts/smoke_test.sh End-to-end test
-storage/              originals/  markdown/   (bind-mounted into ingestion)
+assets/documents/     versioned source PDFs (upload via the UI or smoke_test)
+storage/              originals/  markdown/   (runtime ingest output; bind-mounted)
 ```
 
 ## First-time setup
