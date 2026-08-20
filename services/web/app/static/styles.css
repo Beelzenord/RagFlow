@@ -233,6 +233,14 @@ html[data-theme="light"] .theme-label-light {
   min-width: 0;
 }
 
+/* A reader has no sidebar, so there is no second column to balance against and
+   the conversation sits in the middle of the page instead of off to one side. */
+body:not(.can-write) .grid {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "chat";
+  max-width: 900px;
+}
+
 @media (max-width: 800px) {
   .grid {
     grid-template-columns: 1fr;
@@ -313,22 +321,21 @@ html[data-theme="light"] .theme-label-light {
   margin-bottom: 0;
 }
 
-/* Uploading is an admin privilege, so these panels start hidden and only
-   appear once /api/me says the account may write. Hidden first, revealed
-   later: a reader never sees a control blink into existence and out again. */
-#upload-panel,
-#queue-panel {
+/* Managing the corpus is an admin privilege, and so is knowing what is in it -
+   a reader gets the conversation and nothing else. Keyed off the absence of the
+   class rather than its presence, so everything stays hidden until /api/me
+   grants it: nothing blinks into existence and back out, and an /api/me that
+   never answers fails closed. */
+body:not(.can-write) #sidebar,
+body:not(.can-write) #upload-panel,
+body:not(.can-write) #queue-panel,
+body:not(.can-write) #docs-panel,
+/* "3. Ask" only numbers the steps 1. Upload and 2. Documents above it. */
+body:not(.can-write) #chat-panel > h2,
+/* The Scope picker lists every filename, and the source-details toggle is an
+   admin control; without them Scope stays at its default, all documents. */
+body:not(.can-write) .chat-controls .field {
   display: none;
-}
-
-body.can-write #upload-panel {
-  display: block;
-}
-
-/* The queue panel also carries [hidden] while nothing is uploading, and the
-   attribute has to keep winning over this rule. */
-body.can-write #queue-panel:not([hidden]) {
-  display: block;
 }
 
 #docs-panel {
