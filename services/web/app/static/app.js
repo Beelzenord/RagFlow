@@ -23,6 +23,9 @@ const state = {
   queueBusy: false,
   nextQid: 1,
   turns: [],
+  // Set from /api/me. Starts false so a reader is never briefly offered a
+  // control the server would refuse; the server checks again regardless.
+  canWrite: false,
   streaming: false,
   // Set while an answer is in flight so the send button can cancel it.
   abort: null,
@@ -145,14 +148,16 @@ function renderDocs() {
     badge.className = `badge ${d.status || "uploaded"}`;
     badge.textContent = d.status || "uploaded";
 
-    const delBtn = document.createElement("button");
-    delBtn.type = "button";
-    delBtn.className = "btn-danger";
-    delBtn.textContent = "Delete";
-    delBtn.disabled = state.pendingDeletes.has(d.id);
-    delBtn.addEventListener("click", () => deleteDoc(d, li));
-
-    actions.append(badge, delBtn);
+    actions.append(badge);
+    if (state.canWrite) {
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "btn-danger";
+      delBtn.textContent = "Delete";
+      delBtn.disabled = state.pendingDeletes.has(d.id);
+      delBtn.addEventListener("click", () => deleteDoc(d, li));
+      actions.append(delBtn);
+    }
     row.append(name, actions);
 
     const meta = document.createElement("div");
@@ -416,6 +421,13 @@ async function initSession() {
     els.userBadge.textContent = info.user;
     els.userBadge.hidden = false;
   }
+
+  // Reveal the write controls before any early return below, and repaint the
+  // documents list: the first render ran before this response arrived, so its
+  // rows have no Delete button yet.
+  state.canWrite = info.can_write === true;
+  document.body.classList.toggle("can-write", state.canWrite);
+  if (state.canWrite) renderDocs();
 
   // No logout_url means there is no session to end - an open console with
   // neither a password nor Microsoft sign-in in front of it.

@@ -313,6 +313,24 @@ html[data-theme="light"] .theme-label-light {
   margin-bottom: 0;
 }
 
+/* Uploading is an admin privilege, so these panels start hidden and only
+   appear once /api/me says the account may write. Hidden first, revealed
+   later: a reader never sees a control blink into existence and out again. */
+#upload-panel,
+#queue-panel {
+  display: none;
+}
+
+body.can-write #upload-panel {
+  display: block;
+}
+
+/* The queue panel also carries [hidden] while nothing is uploading, and the
+   attribute has to keep winning over this rule. */
+body.can-write #queue-panel:not([hidden]) {
+  display: block;
+}
+
 #docs-panel {
   flex: 1;
   min-height: 0;

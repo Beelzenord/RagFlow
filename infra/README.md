@@ -41,6 +41,26 @@ The app also rejects any request that arrives without the platform's principal h
 
 `ADMIN_PASSWORD` is ignored in this mode, and `deploy.sh` removes it from the web app so nobody meets two login screens. Local compose keeps the password gate.
 
+## Who may upload and delete
+
+Signing in gets someone in; an **app role** decides what they may do. Two roles, on the same app registration Easy Auth uses:
+
+| Role | May |
+|---|---|
+| `Admin` | Upload, delete, and everything a reader can do |
+| `Reader` | Ask questions, browse the documents list, download a cited file |
+
+Define them once — Entra > App registrations > the app > **App roles** > Create app role — with **Allowed member types = Users/Groups** and the value spelled exactly `Admin` and `Reader`. Then Enterprise applications > the same app > **Users and groups** and assign your admin group to `Admin` and everyone else to `Reader`.
+
+Roles rather than group IDs on purpose: a role keeps working when a group is renamed or replaced, and it survives in the token where a person in many groups would have their group claim dropped for an unhelpful "look it up yourself" pointer instead.
+
+Two things that surprise people:
+
+- **Assigning a *group* to an app role needs an Entra ID P1 licence.** Without one, assign individual users, or keep everyone at the default and grant `Admin` per person.
+- **A new role is not retroactive.** Anyone already signed in keeps the token they have, so they must sign out (`/.auth/logout`) and back in before it takes effect.
+
+An account that holds neither role can read and nothing more, so forgetting an assignment is never an accidental promotion — the web app logs the name it saw. The upload and delete routes check the role themselves; the UI only hides the controls, which stops mistakes, not requests. If the roles must be named differently, set `ENTRA_ADMIN_ROLE` and `ENTRA_READER_ROLE` in `azure.env`.
+
 ## Local vs Azure env (same images)
 
 | | Local compose | Azure |

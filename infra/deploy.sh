@@ -111,6 +111,15 @@ if [[ "$AUTH_MODE" == "password" ]]; then
     "SESSION_SECRET=secretref:session-secret"
   )
 fi
+# Only sent when the app roles were named something other than Admin/Reader; the
+# app already defaults to those. DEV_FORCE_ROLE is deliberately never passed - it
+# is a local testing switch and has no business in a deployment.
+if [[ -n "${ENTRA_ADMIN_ROLE:-}" ]]; then
+  web_env+=("ENTRA_ADMIN_ROLE=$ENTRA_ADMIN_ROLE")
+fi
+if [[ -n "${ENTRA_READER_ROLE:-}" ]]; then
+  web_env+=("ENTRA_READER_ROLE=$ENTRA_READER_ROLE")
+fi
 
 az containerapp update \
   --name "$WEB_APP" \

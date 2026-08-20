@@ -14,7 +14,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -109,6 +109,8 @@ async def api_me(request: Request) -> JSONResponse:
             "auth_mode": auth.describe_mode(),
             "login_url": auth.login_url(),
             "logout_url": auth.logout_url(),
+            "role": auth.role(request),
+            "can_write": auth.is_admin(request),
         }
     )
 
@@ -144,6 +146,16 @@ async def api_logout(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+def require_admin(request: Request) -> None:
+    """Guard the two routes that change the corpus.
+
+    The UI hides these controls from a reader, but hiding is not enforcing: the
+    browser is the only client that respects it, so the check has to live here.
+    """
+    if not auth.is_admin(request):
+        raise HTTPException(403, "this account can read documents but not change them")
+
+
 def _auth_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
     headers = {"x-api-key": SERVICE_API_KEY}
     if extra:
@@ -156,7 +168,7 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/api/upload")
+@app.post("/api/upload", dependencies=[Depends(require_admin)])
 async def api_upload(
     request: Request,
     file: UploadFile = File(...),
@@ -223,7 +235,7 @@ async def api_document(document_id: UUID, request: Request) -> JSONResponse:
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
-@app.delete("/api/documents/{document_id}")
+@app.delete("/api/documents/{document_id}", dependencies=[Depends(require_admin)])
 async def api_document_delete(document_id: UUID, request: Request) -> JSONResponse:
     client: httpx.AsyncClient = request.app.state.http
     try:
