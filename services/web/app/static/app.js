@@ -90,6 +90,17 @@ function saveDocsCache() {
   }
 }
 
+// A reader must not be told what the corpus holds, and the cache outlives the
+// visit that filled it: the same browser signed in as an admin yesterday.
+function clearDocsCache() {
+  state.docs = [];
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* storage disabled - ignore */
+  }
+}
+
 function normalizeDoc(d) {
   return {
     id: d.id,
@@ -328,6 +339,9 @@ function stopBackgroundRefresh() {
 }
 
 document.addEventListener("visibilitychange", () => {
+  // A reader has no list to keep fresh, and asking for one would put the
+  // filenames back in the browser.
+  if (!state.canWrite) return;
   if (document.hidden) {
     stopBackgroundRefresh();
   } else {
@@ -403,6 +417,26 @@ function saveTheme(theme) {
   });
 })();
 
+// What the console becomes once the role is known. A reader is left with the
+// conversation: no documents list, nothing polling for one, no filenames cached
+// from an earlier visit, and no source details, because the toggle that governs
+// them is an admin control they cannot reach.
+function applyRole() {
+  if (!state.canWrite) {
+    stopBackgroundRefresh();
+    clearDocsCache();
+    renderDocs();
+    applyShowSources(false);
+    return;
+  }
+  renderDocs();
+  refreshDocs();
+  startBackgroundRefresh();
+  for (const d of state.docs) {
+    if (!isTerminal(d.status)) startPolling(d.id);
+  }
+}
+
 // The topbar cannot work out who is signed in on its own: with Microsoft
 // sign-in the identity arrives in a request header the page never sees, and
 // signing out has to go through the platform rather than this app.
@@ -422,12 +456,11 @@ async function initSession() {
     els.userBadge.hidden = false;
   }
 
-  // Reveal the write controls before any early return below, and repaint the
-  // documents list: the first render ran before this response arrived, so its
-  // rows have no Delete button yet.
+  // Before any early return below: everything to do with documents waits for
+  // this answer, so a reader's browser never asks for the corpus at all.
   state.canWrite = info.can_write === true;
   document.body.classList.toggle("can-write", state.canWrite);
-  if (state.canWrite) renderDocs();
+  applyRole();
 
   // No logout_url means there is no session to end - an open console with
   // neither a password nor Microsoft sign-in in front of it.
@@ -1002,9 +1035,6 @@ function setStatus(node, text, kind) {
   }
 })();
 
-renderDocs();
-refreshDocs();
-startBackgroundRefresh();
-for (const d of state.docs) {
-  if (!isTerminal(d.status)) startPolling(d.id);
-}
+// Nothing about documents happens here: the first paint, the fetch and the
+// polling all belong to applyRole(), which runs when /api/me says whether this
+// console may see a corpus at all.

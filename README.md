@@ -122,17 +122,20 @@ n8n's env (set in `docker-compose.yml`).
 
 ## Who may upload and delete
 
-The console has two roles. An **admin** uploads and deletes; a **reader** only
-asks questions, browses the documents list and downloads a cited file. On Azure
-the role comes from an Entra app role in the sign-in token
+The console has two roles. An **admin** gets the whole console: upload, the
+documents list, per-document scoping and source details. A **reader** gets a
+centred chat and nothing else — they ask questions and download the documents an
+answer cites, but they are never shown what else the corpus holds. On Azure the
+role comes from an Entra app role in the sign-in token
 ([infra/README.md](infra/README.md)); locally there is one account and it is the
 admin.
 
 To see the reader console without a second account, set `DEV_FORCE_ROLE=reader`
-in `.env` and restart the web container. The Upload panel and the Delete buttons
-disappear, and `POST /api/upload` and `DELETE /api/documents/{id}` answer 403 —
-the roles are enforced in the BFF, not just hidden in the page. The switch is
-ignored when `AUTH_MODE=entra`, so it cannot follow you into a deployment.
+in `.env` and restart the web container. The sidebar, the Scope picker and the
+source-details toggle disappear, and `POST /api/upload`, `DELETE
+/api/documents/{id}` and `GET /api/documents` all answer 403 — the roles are
+enforced in the BFF, not just hidden in the page. The switch is ignored when
+`AUTH_MODE=entra`, so it cannot follow you into a deployment.
 
 ```bash
 cd services/web && python3 -m unittest discover -s tests -t .

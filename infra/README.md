@@ -47,8 +47,8 @@ Signing in gets someone in; an **app role** decides what they may do. Two roles,
 
 | Role | May |
 |---|---|
-| `Admin` | Upload, delete, and everything a reader can do |
-| `Reader` | Ask questions, browse the documents list, download a cited file |
+| `Admin` | Upload, delete, browse the documents list, scope a question to one document, see source details |
+| `Reader` | Ask questions and download the documents an answer cites — nothing that reveals the rest of the corpus |
 
 Define them once — Entra > App registrations > the app > **App roles** > Create app role — with **Allowed member types = Users/Groups** and the value spelled exactly `Admin` and `Reader`. Then Enterprise applications > the same app > **Users and groups** and assign your admin group to `Admin` and everyone else to `Reader`.
 
@@ -59,7 +59,7 @@ Two things that surprise people:
 - **Assigning a *group* to an app role needs an Entra ID P1 licence.** Without one, assign individual users, or keep everyone at the default and grant `Admin` per person.
 - **A new role is not retroactive.** Anyone already signed in keeps the token they have, so they must sign out (`/.auth/logout`) and back in before it takes effect.
 
-An account that holds neither role can read and nothing more, so forgetting an assignment is never an accidental promotion — the web app logs the name it saw. The upload and delete routes check the role themselves; the UI only hides the controls, which stops mistakes, not requests. If the roles must be named differently, set `ENTRA_ADMIN_ROLE` and `ENTRA_READER_ROLE` in `azure.env`.
+An account that holds neither role can read and nothing more, so forgetting an assignment is never an accidental promotion — the web app logs the name it saw. Upload, delete and the documents list all check the role themselves; the UI hiding a control only stops mistakes, not requests. If the roles must be named differently, set `ENTRA_ADMIN_ROLE` and `ENTRA_READER_ROLE` in `azure.env`.
 
 ## Local vs Azure env (same images)
 

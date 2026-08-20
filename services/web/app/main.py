@@ -147,13 +147,15 @@ async def api_logout(request: Request) -> JSONResponse:
 
 
 def require_admin(request: Request) -> None:
-    """Guard the two routes that change the corpus.
+    """Guard everything to do with managing the corpus - changing it, and being
+    told what is in it.
 
-    The UI hides these controls from a reader, but hiding is not enforcing: the
-    browser is the only client that respects it, so the check has to live here.
+    The UI hides these from a reader, but hiding is not enforcing: the browser is
+    the only client that honours a hidden control, so the check has to live here
+    too or the documents list is a curl away.
     """
     if not auth.is_admin(request):
-        raise HTTPException(403, "this account can read documents but not change them")
+        raise HTTPException(403, "this account may ask questions, not manage documents")
 
 
 def _auth_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -196,13 +198,18 @@ async def api_upload(
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
-@app.get("/api/documents")
+@app.get("/api/documents", dependencies=[Depends(require_admin)])
 async def api_documents(
     request: Request,
     collection: str | None = None,
     user_id: str | None = None,
     limit: int | None = None,
 ) -> JSONResponse:
+    """The corpus inventory, for the admin sidebar and its status polling.
+
+    Admin-only because the filenames are the inventory: a reader is told which
+    documents an answer came from, not everything that was ever uploaded.
+    """
     params: dict[str, Any] = {}
     if collection:
         params["collection"] = collection
@@ -222,8 +229,9 @@ async def api_documents(
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
-@app.get("/api/documents/{document_id}")
+@app.get("/api/documents/{document_id}", dependencies=[Depends(require_admin)])
 async def api_document(document_id: UUID, request: Request) -> JSONResponse:
+    """One document's ingestion status, polled while an upload is processing."""
     client: httpx.AsyncClient = request.app.state.http
     try:
         resp = await client.get(
