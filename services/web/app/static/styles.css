@@ -330,6 +330,9 @@ body:not(.can-write) #sidebar,
 body:not(.can-write) #upload-panel,
 body:not(.can-write) #queue-panel,
 body:not(.can-write) #docs-panel,
+/* Upload/index copy is an admin instruction; a reader sees the ask-only hint. */
+body:not(.can-write) .hint-admin,
+body.can-write .hint-reader,
 /* "3. Ask" only numbers the steps 1. Upload and 2. Documents above it. */
 body:not(.can-write) #chat-panel > h2,
 /* The Scope picker lists every filename, and the source-details toggle is an

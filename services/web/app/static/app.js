@@ -1,4 +1,4 @@
-// RAG Console - vanilla JS frontend.
+// Rahmqvist Assistant - vanilla JS frontend.
 // The server (ingestion service) is the source of truth for the documents
 // list. localStorage is kept only as a paint cache so reloads don't flash an
 // empty list before the first /api/documents response lands.
