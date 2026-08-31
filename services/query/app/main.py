@@ -22,6 +22,45 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("query")
 
 
+async def _warm_retrieval() -> None:
+    """Pay the first query's fixed startup costs at boot instead of in a user's
+    latency budget.
+
+    Two things are cold in a freshly started replica: the SQLAlchemy pool holds
+    no connection yet (so the first query pays a TCP + TLS handshake to
+    Postgres), and the HNSW index is not in the server's shared_buffers (so the
+    first ANN scan reads it off disk). A throwaway search warms both and also
+    lets Postgres plan the query once.
+
+    The probe vector is read back out of the table rather than embedded, so
+    this costs zero API tokens. Cast to text in SQL because the driver may hand
+    a vector back as a type whose repr pgvector cannot parse.
+
+    Best-effort by design: an empty corpus or a database that is still coming
+    up must not stop the service from serving.
+    """
+    try:
+        async with session_scope() as session:
+            # Opens the pool even when there is nothing indexed yet.
+            await session.execute(text("SELECT 1"))
+            probe = (
+                await session.execute(
+                    text("SELECT embedding::text FROM document_chunks "
+                         "WHERE embedding IS NOT NULL LIMIT 1")
+                )
+            ).scalar()
+            if probe is None:
+                log.info("warm-up: pool opened, no chunks indexed yet")
+                return
+            await session.execute(
+                text("SELECT 1 FROM document_chunks ORDER BY embedding <=> :q LIMIT 1"),
+                {"q": probe},
+            )
+        log.info("warm-up: connection pool and vector index primed")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("warm-up skipped: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Build the embedding + LLM clients once per process and reuse their
@@ -29,6 +68,7 @@ async def lifespan(app: FastAPI):
     /query call."""
     app.state.embedder = EmbeddingClient()
     app.state.llm = LLMClient()
+    await _warm_retrieval()
     log.info("query service ready (embedder + llm clients initialized)")
     try:
         yield
