@@ -195,9 +195,11 @@ create_or_update_app() {
 
 # Placeholder listens on 80. deploy.sh switches target ports to 8080/8001/8002
 # and points INGESTION_URL / QUERY_URL at http://<app-name> (ACA ingress, not the container port).
+# Min-replica counts are re-asserted by deploy.sh; see the note there for why
+# query is pinned warm and ingestion cannot yet scale to zero.
 create_or_update_app "$WEB_APP" external 80 0
 create_or_update_app "$INGEST_APP" internal 80 1
-create_or_update_app "$QUERY_APP" internal 80 0
+create_or_update_app "$QUERY_APP" internal 80 1
 
 echo "→ allow HTTP between apps (so INGESTION_URL=http://$INGEST_APP works)"
 for app in "$WEB_APP" "$INGEST_APP" "$QUERY_APP"; do

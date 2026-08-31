@@ -75,8 +75,14 @@ update_python_app() {
     --output none
 }
 
+# Query keeps a warm replica: it is the only service a user waits on
+# synchronously, and a scale-from-zero cold start lands entirely in the
+# first question's latency. Ingestion stays at 1 as well - it runs its
+# pipeline in FastAPI BackgroundTasks, which hold no in-flight request, so
+# a replica scaled to zero would be reclaimed mid-parse and silently drop
+# the job. It can go to 0 once ingestion moves to the Redis queue.
 update_python_app "$INGEST_APP" ingestion 8001 1 1
-update_python_app "$QUERY_APP" query 8002 0 2
+update_python_app "$QUERY_APP" query 8002 1 2
 
 echo "→ mount Azure Files on $INGEST_APP at /data/storage"
 tmp="$(mktemp)"

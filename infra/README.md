@@ -94,6 +94,36 @@ Sign-in gates the browser only. `ingestion` and `query` stay internal and keep t
 
 Everyone who can sign in still sees the same corpus: Entra decides *who gets in*, not which documents they may read. Per-group document scoping is a separate change.
 
+## Cold start
+
+`query` and `ingestion` both keep one warm replica; `web` still scales to zero.
+Query is pinned because it is the only service a user waits on synchronously —
+a scale-from-zero start would land entirely in the first question's latency.
+Ingestion is pinned for a different reason: it runs its pipeline in FastAPI
+`BackgroundTasks`, which hold no in-flight HTTP request, so a replica scaled to
+zero can be reclaimed mid-parse and silently drop the job. It can safely drop to
+0 once ingestion moves to the Redis queue.
+
+The query service also warms its connection pool and the HNSW index at startup
+(`_warm_retrieval` in `services/query/app/main.py`), so the first real question
+does not pay for a cold pool or an index read off disk. It reuses a stored
+embedding as the probe vector, so it costs no API tokens.
+
+### TODO — tune the scale-down cooldown (not implemented)
+
+An alternative to a permanently warm replica: raise the scale rule's
+`cooldownPeriod` (default 300s) to roughly an hour, so a replica stays warm
+through a working session and still drops to zero overnight. Cheaper than
+always-on, at the cost of a cold first question each morning. It lives under
+`properties.template.scale` and likely needs `az containerapp update --yaml`
+rather than a CLI flag — verify against the current API version before relying
+on it.
+
+Do **not** solve this with a cron keep-alive ping. With a 300s cooldown that
+means pinging every ~4 minutes, which keeps a replica up around the clock
+anyway, but billed at the active rate rather than the cheaper idle rate a
+`minReplicas` replica gets — more expensive than simply pinning it, plus churn.
+
 ## What these scripts do not do
 
 They do not apply `03`/`04` (already in `02` on a fresh database), do not copy your local corpus, do not create n8n/Redis/Azure OpenAI, and do not add GitHub Actions. They do not create the Entra app registration or the access group either — that part is the portal steps above; the scripts only verify Easy Auth is on.
