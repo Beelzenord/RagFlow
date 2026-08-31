@@ -6,6 +6,7 @@ ship to the browser.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -20,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import auth
+from app import auth, voice
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("web")
@@ -29,24 +30,6 @@ INGESTION_URL = os.environ.get("INGESTION_URL", "http://ingestion:8001").rstrip(
 QUERY_URL = os.environ.get("QUERY_URL", "http://query:8002").rstrip("/")
 SERVICE_API_KEY = os.environ.get("SERVICE_API_KEY", "")
 HTTP_TIMEOUT = float(os.environ.get("WEB_HTTP_TIMEOUT", "120"))
-
-ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
-ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
-ELEVENLABS_VOICE_ID_SV = os.environ.get("ELEVENLABS_VOICE_ID_SV", "kPdGSxhZAqy4bmPAf9iJ")
-ELEVENLABS_TTS_MODEL = os.environ.get("ELEVENLABS_TTS_MODEL", "eleven_multilingual_v2")
-ELEVENLABS_STT_MODEL = os.environ.get("ELEVENLABS_STT_MODEL", "scribe_v1")
-ELEVENLABS_BASE_URL = os.environ.get("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io").rstrip("/")
-
-ELEVENLABS_VOICES: dict[str, str] = {
-    "en": ELEVENLABS_VOICE_ID,
-    "sv": ELEVENLABS_VOICE_ID_SV,
-}
-
-
-def _voice_for_lang(lang: str | None) -> str:
-    key = (lang or "").lower()
-    return ELEVENLABS_VOICES.get(key) or ELEVENLABS_VOICE_ID
-
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -111,6 +94,9 @@ async def api_me(request: Request) -> JSONResponse:
             "logout_url": auth.logout_url(),
             "role": auth.role(request),
             "can_write": auth.is_admin(request),
+            # Lets the UI hide the microphone rather than offer a control that
+            # would answer 503.
+            "voice_enabled": voice.enabled(),
         }
     )
 
@@ -371,98 +357,79 @@ async def api_query_stream(body: QueryBody, request: Request) -> StreamingRespon
     return StreamingResponse(upstream(), media_type="application/x-ndjson")
 
 
-def _elevenlabs_unavailable() -> HTTPException:
-    return HTTPException(503, "voice features require ELEVENLABS_API_KEY")
+MAX_VOICE_UPLOAD_BYTES = int(os.environ.get("MAX_VOICE_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 
 
-@app.post("/api/voice/transcribe")
-async def api_voice_transcribe(
+@app.post("/api/voice/ask")
+async def api_voice_ask(
     request: Request,
     file: UploadFile = File(...),
     lang: str | None = Form(default=None),
-) -> JSONResponse:
-    """Forward an audio blob to ElevenLabs Scribe and return the transcript."""
-    if not ELEVENLABS_API_KEY:
-        raise _elevenlabs_unavailable()
+    document_id: str | None = Form(default=None),
+    history: str | None = Form(default=None),
+) -> StreamingResponse:
+    """One spoken turn: audio in, NDJSON (transcript, answer, audio) out.
+
+    Deliberately not an audio response. Returning `audio/mpeg` means the status
+    line is committed before the first byte is generated, so an upstream refusal
+    becomes a 200 with an empty body and the browser cannot tell success from
+    failure - which is exactly how the previous version lost sentences in silence.
+    NDJSON keeps failures addressable as `error` events.
+    """
+    if not voice.enabled():
+        raise HTTPException(503, "voice features require ELEVENLABS_API_KEY")
+
     content = await file.read()
-    files = {
-        "file": (
-            file.filename or "audio.webm",
-            content,
-            file.content_type or "audio/webm",
+    if not content:
+        raise HTTPException(400, "no audio received")
+    if len(content) > MAX_VOICE_UPLOAD_BYTES:
+        raise HTTPException(413, "recording too large")
+
+    turns = _parse_history(history)
+    client: httpx.AsyncClient = request.app.state.http
+
+    return StreamingResponse(
+        voice.run_turn(
+            http=client,
+            query_url=QUERY_URL,
+            service_api_key=SERVICE_API_KEY,
+            audio=content,
+            filename=file.filename or "audio.webm",
+            content_type=file.content_type or "audio/webm",
+            lang=lang,
+            document_id=document_id,
+            history=turns,
         ),
-    }
-    data: dict[str, str] = {"model_id": ELEVENLABS_STT_MODEL}
-    if lang and lang.lower() in ELEVENLABS_VOICES:
-        data["language_code"] = lang.lower()
-    client: httpx.AsyncClient = request.app.state.http
+        media_type="application/x-ndjson",
+        headers={"cache-control": "no-store"},
+    )
+
+
+def _parse_history(raw: str | None) -> list[dict[str, str]]:
+    """Validate the prior turns a multipart form carried as a JSON string.
+
+    Shaped to match ChatTurn in the query service, and dropped rather than
+    rejected on malformed input: losing conversational context is a far better
+    failure than refusing the question.
+    """
+    if not raw:
+        return []
     try:
-        resp = await client.post(
-            f"{ELEVENLABS_BASE_URL}/v1/speech-to-text",
-            headers={"xi-api-key": ELEVENLABS_API_KEY},
-            files=files,
-            data=data,
-        )
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, f"elevenlabs unreachable: {exc}") from exc
-
-    if resp.status_code >= 400:
-        return JSONResponse(
-            status_code=resp.status_code,
-            content={"error": resp.text[:500] or f"HTTP {resp.status_code}"},
-        )
-    body = _safe_json(resp)
-    text = ""
-    if isinstance(body, dict):
-        text = body.get("text") or body.get("transcript") or ""
-    return JSONResponse({"text": text})
-
-
-class TTSBody(BaseModel):
-    text: str = Field(..., min_length=1, max_length=5000)
-    voice_id: str | None = None
-    lang: str | None = None
-
-
-@app.post("/api/voice/tts")
-async def api_voice_tts(body: TTSBody, request: Request) -> StreamingResponse:
-    """Stream audio/mpeg bytes from ElevenLabs TTS straight to the browser."""
-    if not ELEVENLABS_API_KEY:
-        raise _elevenlabs_unavailable()
-    voice_id = body.voice_id or _voice_for_lang(body.lang)
-    payload = {
-        "text": body.text,
-        "model_id": ELEVENLABS_TTS_MODEL,
-    }
-    client: httpx.AsyncClient = request.app.state.http
-
-    async def upstream() -> Any:
-        try:
-            async with client.stream(
-                "POST",
-                f"{ELEVENLABS_BASE_URL}/v1/text-to-speech/{voice_id}/stream",
-                headers={
-                    "xi-api-key": ELEVENLABS_API_KEY,
-                    "content-type": "application/json",
-                    "accept": "audio/mpeg",
-                },
-                json=payload,
-            ) as resp:
-                if resp.status_code >= 400:
-                    body_bytes = await resp.aread()
-                    log.warning(
-                        "elevenlabs tts %s: %s",
-                        resp.status_code,
-                        body_bytes.decode(errors="replace")[:300],
-                    )
-                    return
-                async for chunk in resp.aiter_bytes():
-                    if chunk:
-                        yield chunk
-        except httpx.HTTPError as exc:
-            log.warning("elevenlabs tts unreachable: %s", exc)
-
-    return StreamingResponse(upstream(), media_type="audio/mpeg")
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        log.warning("ignoring malformed voice history")
+        return []
+    if not isinstance(parsed, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in parsed[-12:]:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        text = item.get("content")
+        if role in ("user", "assistant") and isinstance(text, str) and text.strip():
+            out.append({"role": role, "content": text[:4000]})
+    return out
 
 
 def _json_str(s: str) -> str:

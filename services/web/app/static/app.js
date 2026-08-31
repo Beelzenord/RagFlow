@@ -12,6 +12,10 @@ const REFRESH_MS = 5000;
 const MAX_HISTORY_TURNS = 6;
 const MAX_TURN_CHARS = 1500;
 const POLL_MS = 2000;
+const VOICE_LANG_KEY = "rag.voiceLang.v1";
+// Enough of a cushion to absorb a network hiccup between chunks without being
+// audible as a delay before the answer starts.
+const AUDIO_LEAD_SECONDS = 0.06;
 
 const state = {
   docs: loadDocsCache(),
@@ -29,6 +33,26 @@ const state = {
   streaming: false,
   // Set while an answer is in flight so the send button can cancel it.
   abort: null,
+};
+
+// Voice keeps its own state so nothing in the written path can be disturbed by
+// it. Declared here rather than beside the voice code because updateSendBtn runs
+// during the initial paint and reads voice.recording.
+const voice = {
+  recording: false,
+  streaming: false,
+  abort: null,
+  recorder: null,
+  micStream: null,
+  chunks: [],
+  audioCtx: null,
+  // The next free instant on the output timeline. Every chunk starts here, so
+  // playback order is a consequence of arrival order and nothing else.
+  nextStartTime: 0,
+  sources: [],
+  // A chunk boundary can fall inside a 16-bit sample; the odd byte waits here
+  // for the rest of its pair rather than being played as noise.
+  pcmCarry: null,
 };
 
 const els = {
@@ -55,6 +79,10 @@ const els = {
   newChatBtn: document.getElementById("new-chat-btn"),
   logoutBtn: document.getElementById("logout-btn"),
   userBadge: document.getElementById("user-badge"),
+  voiceControls: document.getElementById("voice-controls"),
+  micBtn: document.getElementById("mic-btn"),
+  voiceLang: document.getElementById("voice-lang"),
+  voiceStatus: document.getElementById("voice-status"),
 };
 
 // Where to send the browser when the server stops recognising it. Overwritten
@@ -462,6 +490,10 @@ async function initSession() {
   document.body.classList.toggle("can-write", state.canWrite);
   applyRole();
 
+  // Without an ElevenLabs key every voice request would 503, so the control is
+  // withheld rather than offered and then refused.
+  if (info.voice_enabled === true) initVoice();
+
   // No logout_url means there is no session to end - an open console with
   // neither a password nor Microsoft sign-in in front of it.
   if (!els.logoutBtn || !info.logout_url) return;
@@ -730,6 +762,32 @@ els.queueClearBtn.addEventListener("click", () => {
   renderQueue();
 });
 
+async function readNdjson(resp, onEvent) {
+  /** Feed one parsed object per line to onEvent, in arrival order. */
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (!line.trim()) continue;
+      try {
+        onEvent(JSON.parse(line));
+      } catch (err) {
+        console.warn("bad ndjson line", line, err);
+      }
+    }
+  }
+  if (buf.trim()) {
+    try { onEvent(JSON.parse(buf)); } catch (_) { /* ignore */ }
+  }
+}
+
 async function runChat(question) {
   if (!question) return;
   const documentId = els.scopeSelect.value || null;
@@ -799,28 +857,7 @@ async function runChat(question) {
       throw new Error(msg);
     }
 
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf("\n")) !== -1) {
-        const line = buf.slice(0, nl);
-        buf = buf.slice(nl + 1);
-        if (!line.trim()) continue;
-        try {
-          handleEvent(JSON.parse(line));
-        } catch (err) {
-          console.warn("bad ndjson line", line, err);
-        }
-      }
-    }
-    if (buf.trim()) {
-      try { handleEvent(JSON.parse(buf)); } catch (_) { /* ignore */ }
-    }
+    await readNdjson(resp, handleEvent);
   } catch (err) {
     if (err.name === "AbortError") {
       // Stopping is a decision, not a failure, so whatever already arrived
@@ -861,6 +898,7 @@ function recordTurn(role, content) {
 
 function resetChat() {
   state.turns = [];
+  cancelVoiceTurn();
   els.chatLog.innerHTML = "";
   updateNewChatBtn();
   autoGrowInput();
@@ -922,6 +960,7 @@ function updateSendBtn() {
   els.chatForm.classList.toggle("is-streaming", busy);
   els.askBtn.disabled = !busy && !els.questionInput.value.trim();
   els.askBtn.setAttribute("aria-label", busy ? "Stop generating" : "Send");
+  updateMicBtn();
 }
 
 updateSendBtn();
@@ -1009,6 +1048,325 @@ function renderCitations(list) {
 function setStatus(node, text, kind) {
   node.textContent = text;
   node.className = `status ${kind || ""}`.trim();
+}
+
+// ---------------------------------------------------------------------------
+// Voice: push to talk
+//
+// One recording goes up, one NDJSON stream comes back carrying the transcript,
+// the answer text and the audio. Audio is appended in arrival order and nothing
+// here reorders, retries or drops a chunk - the previous version fired a request
+// per sentence and tried to resequence the replies, which is where the wrong
+// order and the missing short sentences came from. The written chat path is not
+// touched: this shares the renderers and state.turns, and nothing else.
+// ---------------------------------------------------------------------------
+
+function initVoice() {
+  if (!els.micBtn || !els.voiceControls) return;
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    return;
+  }
+  els.voiceControls.hidden = false;
+
+  try {
+    const saved = localStorage.getItem(VOICE_LANG_KEY);
+    if (saved && els.voiceLang) els.voiceLang.value = saved;
+  } catch {
+    /* ignore */
+  }
+  els.voiceLang?.addEventListener("change", () => {
+    try {
+      localStorage.setItem(VOICE_LANG_KEY, els.voiceLang.value);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  els.micBtn.addEventListener("click", () => {
+    if (voice.recording) stopRecording();
+    else if (voice.streaming) cancelVoiceTurn();
+    else startRecording();
+  });
+}
+
+function setVoiceStatus(text) {
+  if (els.voiceStatus) els.voiceStatus.textContent = text || "";
+}
+
+function updateMicBtn() {
+  if (!els.micBtn) return;
+  els.micBtn.classList.toggle("is-recording", voice.recording);
+  els.micBtn.setAttribute(
+    "aria-label",
+    voice.recording ? "Stop recording" : voice.streaming ? "Stop speaking" : "Ask by voice",
+  );
+  // The written composer stays usable, but two answers streaming into the same
+  // log at once would interleave.
+  els.micBtn.disabled = state.streaming;
+}
+
+function pickRecorderMime() {
+  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
+  for (const type of candidates) {
+    if (MediaRecorder.isTypeSupported?.(type)) return type;
+  }
+  return "";
+}
+
+async function startRecording() {
+  if (voice.recording || voice.streaming) return;
+  try {
+    voice.micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+    });
+  } catch (err) {
+    setVoiceStatus(err.name === "NotAllowedError" ? "Microphone blocked" : "No microphone");
+    return;
+  }
+
+  // Creating the context inside the click keeps it out of the autoplay-blocked
+  // state; created later, the first answer would be silent.
+  ensureAudioCtx();
+
+  const mime = pickRecorderMime();
+  voice.chunks = [];
+  try {
+    voice.recorder = new MediaRecorder(voice.micStream, mime ? { mimeType: mime } : undefined);
+  } catch {
+    releaseMic();
+    setVoiceStatus("Recording unsupported here");
+    return;
+  }
+
+  voice.recorder.addEventListener("dataavailable", (e) => {
+    if (e.data && e.data.size) voice.chunks.push(e.data);
+  });
+  voice.recorder.addEventListener("stop", () => {
+    const type = voice.recorder?.mimeType || mime || "audio/webm";
+    const blob = new Blob(voice.chunks, { type });
+    voice.chunks = [];
+    releaseMic();
+    voice.recording = false;
+    updateMicBtn();
+    if (blob.size > 0) sendVoiceTurn(blob);
+    else setVoiceStatus("");
+  });
+
+  voice.recorder.start();
+  voice.recording = true;
+  setVoiceStatus("Listening - click to send");
+  updateMicBtn();
+}
+
+function stopRecording() {
+  if (!voice.recording) return;
+  try {
+    voice.recorder?.stop();
+  } catch {
+    releaseMic();
+    voice.recording = false;
+    updateMicBtn();
+  }
+}
+
+function releaseMic() {
+  // Leaving the track live keeps the browser's recording indicator on, which
+  // reads as "still listening" long after the turn is over.
+  voice.micStream?.getTracks().forEach((t) => t.stop());
+  voice.micStream = null;
+  voice.recorder = null;
+}
+
+function cancelVoiceTurn() {
+  voice.abort?.abort();
+  stopPlayback();
+}
+
+function ensureAudioCtx() {
+  const Ctor = window.AudioContext || window.webkitAudioContext;
+  if (!Ctor) return null;
+  if (!voice.audioCtx) voice.audioCtx = new Ctor();
+  if (voice.audioCtx.state === "suspended") voice.audioCtx.resume().catch(() => {});
+  return voice.audioCtx;
+}
+
+function stopPlayback() {
+  for (const src of voice.sources) {
+    try {
+      src.stop();
+    } catch {
+      /* already finished */
+    }
+  }
+  voice.sources = [];
+  voice.pcmCarry = null;
+  voice.nextStartTime = 0;
+}
+
+function base64ToBytes(b64) {
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function enqueueAudio(b64, sampleRate) {
+  /** Schedule one PCM chunk immediately after the one before it. */
+  const ctx = ensureAudioCtx();
+  if (!ctx) return;
+
+  let bytes = base64ToBytes(b64);
+  if (voice.pcmCarry) {
+    const merged = new Uint8Array(voice.pcmCarry.length + bytes.length);
+    merged.set(voice.pcmCarry, 0);
+    merged.set(bytes, voice.pcmCarry.length);
+    bytes = merged;
+    voice.pcmCarry = null;
+  }
+  if (bytes.length % 2 === 1) {
+    voice.pcmCarry = bytes.slice(bytes.length - 1);
+    bytes = bytes.subarray(0, bytes.length - 1);
+  }
+  const samples = bytes.length / 2;
+  if (samples < 1) return;
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+  const buffer = ctx.createBuffer(1, samples, sampleRate || 22050);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < samples; i++) channel[i] = view.getInt16(i * 2, true) / 32768;
+
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(ctx.destination);
+  // Append-only. If decoding fell behind the clock, restart from now rather
+  // than scheduling in the past, which the browser would play all at once.
+  const startAt = Math.max(voice.nextStartTime, ctx.currentTime + AUDIO_LEAD_SECONDS);
+  src.start(startAt);
+  voice.nextStartTime = startAt + buffer.duration;
+  voice.sources.push(src);
+  src.addEventListener("ended", () => {
+    voice.sources = voice.sources.filter((s) => s !== src);
+  });
+}
+
+async function sendVoiceTurn(blob) {
+  const lang = els.voiceLang?.value || "en";
+  const documentId = els.scopeSelect.value || null;
+  const history = state.turns.slice(-MAX_HISTORY_TURNS);
+
+  stopPlayback();
+  voice.streaming = true;
+  voice.abort = new AbortController();
+  setVoiceStatus("Thinking...");
+  updateMicBtn();
+
+  const form = new FormData();
+  form.append("file", blob, blob.type.includes("mp4") ? "audio.mp4" : "audio.webm");
+  form.append("lang", lang);
+  if (documentId) form.append("document_id", documentId);
+  if (history.length) form.append("history", JSON.stringify(history));
+
+  let bubble = null;
+  let answerNode = null;
+  let question = "";
+  let firstDeltaSeen = false;
+  let answered = false;
+  let failure = "";
+
+  const ensureBubble = () => {
+    if (bubble) return;
+    bubble = appendMessage("bot", "");
+    answerNode = document.createElement("div");
+    answerNode.className = "answer";
+    const spinner = document.createElement("span");
+    spinner.className = "spinner";
+    spinner.setAttribute("aria-label", "thinking");
+    answerNode.appendChild(spinner);
+    bubble.appendChild(answerNode);
+  };
+
+  const handleEvent = (evt) => {
+    if (!evt || typeof evt !== "object") return;
+    if (evt.type === "transcript") {
+      question = evt.text || "";
+      appendMessage("user", question);
+      ensureBubble();
+      setVoiceStatus("Answering...");
+    } else if (evt.type === "rewrite") {
+      ensureBubble();
+      if (evt.text) bubble.appendChild(renderRewrite(evt.text));
+    } else if (evt.type === "citations") {
+      ensureBubble();
+      if (Array.isArray(evt.data) && evt.data.length) {
+        bubble.appendChild(renderSourceDocs(evt.data));
+        bubble.appendChild(renderCitations(evt.data));
+      }
+    } else if (evt.type === "delta") {
+      ensureBubble();
+      if (!firstDeltaSeen) {
+        answerNode.textContent = "";
+        firstDeltaSeen = true;
+      }
+      answerNode.appendChild(document.createTextNode(evt.text || ""));
+      els.chatLog.scrollTop = els.chatLog.scrollHeight;
+    } else if (evt.type === "audio") {
+      if (evt.b64) enqueueAudio(evt.b64, evt.sample_rate);
+    } else if (evt.type === "error") {
+      // A failure that arrives mid-stream is shown as itself. The endpoint
+      // answers NDJSON precisely so this cannot become an empty success.
+      failure = evt.message || "unknown error";
+      ensureBubble();
+      bubble.classList.add("error");
+      answerNode.textContent = `Voice failed: ${failure}`;
+    } else if (evt.type === "done") {
+      ensureBubble();
+      if (!firstDeltaSeen) {
+        answerNode.textContent = "(empty answer)";
+      } else {
+        answerNode.textContent = stripInlineCitations(answerNode.textContent);
+        answered = true;
+      }
+    }
+  };
+
+  try {
+    const resp = await fetch("/api/voice/ask", {
+      method: "POST",
+      body: form,
+      signal: voice.abort.signal,
+    });
+    if (bounceIfLoggedOut(resp.status)) return;
+    if (!resp.ok || !resp.body) {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(data?.detail || data?.error || `HTTP ${resp.status}`);
+    }
+    await readNdjson(resp, handleEvent);
+  } catch (err) {
+    if (err.name === "AbortError") {
+      if (answerNode && firstDeltaSeen) {
+        answerNode.textContent = stripInlineCitations(answerNode.textContent);
+        answered = true;
+      } else if (answerNode) {
+        answerNode.textContent = "(stopped)";
+      }
+    } else {
+      failure = err.message;
+      ensureBubble();
+      bubble.classList.add("error");
+      answerNode.textContent = `Voice failed: ${err.message}`;
+    }
+  } finally {
+    voice.streaming = false;
+    voice.abort = null;
+    setVoiceStatus("");
+    updateMicBtn();
+    // Spoken turns join the same history as written ones, so a follow-up can be
+    // typed after being asked aloud and the other way round.
+    if (answered && question) {
+      recordTurn("user", question);
+      recordTurn("assistant", answerNode.textContent);
+    }
+  }
 }
 
 (function initCollapsiblePanels() {

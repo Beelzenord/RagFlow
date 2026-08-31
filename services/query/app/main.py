@@ -50,12 +50,19 @@ SYSTEM_PROMPT = (
 )
 
 SYSTEM_PROMPT_VOICE = (
-    "You are a warm, helpful voice assistant that answers from the user's documents. Speak "
-    "naturally and kindly, the way you would help a colleague - clear and easy to follow "
-    "aloud, but never invent facts. Answer ONLY using the provided sources. Do NOT include "
-    "bracketed citation markers like [1], [2] in your spoken text; the UI shows sources "
-    "separately. Keep answers concise. If the answer is not in the sources, say so honestly "
-    "in a sentence or two and gently suggest what the user could try next."
+    "You are a warm, helpful voice assistant that answers from the user's documents. Your "
+    "reply is going to be spoken aloud, so write it the way a person talks, not the way a "
+    "document reads.\n"
+    "- Aim for 40 words. Never exceed 3 sentences.\n"
+    "- One idea per sentence. No lists, no headings, no bullet points, no parentheses, no "
+    "bracketed citation markers like [1] - the screen shows the sources separately.\n"
+    "- Write numbers, prices, dates and reference numbers the way you would say them out "
+    "loud, in the language you are answering in, so they can be read straight off the page "
+    "by a speech synthesiser.\n"
+    "- Answer ONLY from the provided sources and never invent facts. If the answer is not "
+    "there, say so in one sentence and suggest what to try next.\n"
+    "- Give the single most useful fact first. The user can simply ask a follow-up question "
+    "for anything more, so do not try to cover everything at once."
 )
 
 NO_HITS_ANSWER = (
@@ -77,6 +84,13 @@ REWRITE_PROMPT = (
 REWRITE_MAX_TOKENS = 120
 # Guardrail for a runaway rewrite (model explaining itself instead of answering).
 REWRITE_MAX_CHARS = 400
+
+ANSWER_MAX_TOKENS = 800
+# A spoken answer has to be short, and asking the prompt nicely does not achieve
+# that - a model handed six retrieved chunks and 800 tokens of headroom writes an
+# essay whatever the system prompt says. The ceiling is the enforcement; the
+# wording in SYSTEM_PROMPT_VOICE only shapes what fits inside it. ~40 words.
+VOICE_MAX_TOKENS = 160
 
 
 class ChatTurn(BaseModel):
@@ -115,6 +129,10 @@ def _system_prompt_for(req: QueryRequest) -> str:
     if name:
         return f"{base} Answer in {name}."
     return base
+
+
+def _max_tokens_for(req: QueryRequest) -> int:
+    return VOICE_MAX_TOKENS if req.voice else ANSWER_MAX_TOKENS
 
 
 def _history_turns(req: QueryRequest) -> list[Turn]:
@@ -404,7 +422,7 @@ async def query(req: QueryRequest, request: Request) -> QueryResponse:
         answer = await llm.complete(
             _system_prompt_for(req),
             user_msg,
-            max_tokens=800,
+            max_tokens=_max_tokens_for(req),
             history=_history_turns(req),
         )
     except Exception as exc:
@@ -468,7 +486,7 @@ async def _run_stream(
         async for chunk in llm.stream(
             _system_prompt_for(req),
             user_msg,
-            max_tokens=800,
+            max_tokens=_max_tokens_for(req),
             history=_history_turns(req),
         ):
             if chunk:
