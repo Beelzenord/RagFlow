@@ -763,6 +763,72 @@ button:disabled {
   text-align: right;
 }
 
+/* Push-to-talk. Sits with the chat controls rather than in the composer so the
+   written and spoken paths stay visibly separate. */
+.voice-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.voice-controls select {
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.mic-btn {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--panel-border);
+}
+
+.mic-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.mic-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mic-btn svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+
+.mic-btn .icon-mic-stop { display: none; }
+
+.mic-btn.is-recording {
+  color: #fff;
+  background: var(--err);
+  border-color: transparent;
+  animation: rag-pulse 1.4s ease-in-out infinite;
+}
+
+.mic-btn.is-recording .icon-mic { display: none; }
+.mic-btn.is-recording .icon-mic-stop { display: block; }
+
+@keyframes rag-pulse {
+  50% { opacity: 0.6; }
+}
+
+.voice-status {
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+}
+
 .btn-secondary {
   background: transparent;
   color: var(--muted);
