@@ -132,7 +132,16 @@ class VoiceEndpointTests(unittest.TestCase):
                 setattr(self.main.app.state.http, "post", fake_post)
             return client.post(
                 "/api/voice/ask",
-                files={"file": ("audio.webm", form.pop("audio", b"\x00\x01"), "audio/webm")},
+                files={
+                    # Above MIN_VOICE_UPLOAD_BYTES: these tests are about what
+                    # happens *after* a recording is accepted, so the default
+                    # blob has to clear the size floor.
+                    "file": (
+                        "audio.webm",
+                        form.pop("audio", b"\x00" * 2048),
+                        "audio/webm",
+                    )
+                },
                 data=form,
             )
 
@@ -162,6 +171,27 @@ class VoiceEndpointTests(unittest.TestCase):
 
     def test_empty_recording_is_rejected(self) -> None:
         self.assertEqual(self.ask(audio=b"").status_code, 400)
+
+    def test_recording_under_the_size_floor_is_rejected(self) -> None:
+        """A stray click produces a container header and nothing else. Refusing
+        it here is one fewer Scribe call for a clip with no speech in it."""
+        resp = self.ask(audio=b"\x00" * 16)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("too short", resp.json()["detail"])
+
+    def test_hallucinated_transcript_never_reaches_the_query_service(self) -> None:
+        """Scribe answers silence with subtitle boilerplate, not "". Left alone
+        it costs an embedding, two LLM calls and the audio to speak the result."""
+        resp = self.ask(scribe=(200, {"text": "Thank you."}), lang="en")
+        self.assertEqual([e["type"] for e in self.events(resp)], ["error"])
+
+    def test_swedish_artifact_is_also_caught(self) -> None:
+        resp = self.ask(scribe=(200, {"text": "Tack!"}), lang="sv")
+        self.assertEqual([e["type"] for e in self.events(resp)], ["error"])
+
+    def test_punctuation_only_transcript_is_rejected(self) -> None:
+        resp = self.ask(scribe=(200, {"text": "..."}), lang="en")
+        self.assertEqual([e["type"] for e in self.events(resp)], ["error"])
 
     def test_the_dead_endpoints_are_gone(self) -> None:
         paths = {r.path for r in self.main.app.routes if hasattr(r, "path")}
@@ -427,6 +457,59 @@ class TextPathRegressionTests(unittest.TestCase):
         # text answer silently shrinks to 160 tokens.
         self.assertNotIn("voice", body)
         self.assertIn('"type":"done"', resp.text)
+
+
+class JunkTranscriptTests(unittest.TestCase):
+    """The filter's job is to be cheap and to never eat a real question.
+
+    A false negative costs one wasted turn. A false positive tells someone who
+    did speak that they were not heard, so the asymmetry is deliberate and these
+    tests weight the second case far more heavily than the first.
+    """
+
+    def test_silence_and_noise_are_junk(self) -> None:
+        for text in ["", "   ", ".", "...", "?", "-", "\n\t"]:
+            with self.subTest(text=text):
+                self.assertTrue(voice.is_junk_transcript(text))
+
+    def test_known_artifacts_are_junk(self) -> None:
+        for text in [
+            "Thank you.",
+            "thanks for watching!",
+            "You",
+            "Tack.",
+            "tack så mycket",
+            "Hej då!",
+            "Mm.",
+        ]:
+            with self.subTest(text=text):
+                self.assertTrue(voice.is_junk_transcript(text))
+
+    def test_real_questions_survive(self) -> None:
+        """Every one of these is a question this corpus is expected to answer."""
+        for text in [
+            "Semester?",
+            "ID?",
+            "Vad gäller för föräldraledighet?",
+            "How many vacation days do I get?",
+            "What is the expense limit for client dinners?",
+            "hur mycket kostar den?",
+        ]:
+            with self.subTest(text=text):
+                self.assertFalse(voice.is_junk_transcript(text))
+
+    def test_an_artifact_inside_a_real_question_is_not_junk(self) -> None:
+        """Matching is on the whole normalised string, never a substring - a
+        polite question that happens to contain "tack" is still a question."""
+        self.assertFalse(voice.is_junk_transcript("Tack, vad gäller för semester?"))
+        self.assertFalse(voice.is_junk_transcript("Thank you - what is the policy?"))
+
+    def test_ambiguous_single_words_are_left_alone(self) -> None:
+        """ja/nej/yes/no are absent from the list on purpose: answering a real
+        utterance with "I didn't catch that" is the worse failure."""
+        for text in ["ja", "nej", "yes", "no"]:
+            with self.subTest(text=text):
+                self.assertFalse(voice.is_junk_transcript(text))
 
 
 class ConfigTests(unittest.TestCase):

@@ -358,6 +358,13 @@ async def api_query_stream(body: QueryBody, request: Request) -> StreamingRespon
 
 
 MAX_VOICE_UPLOAD_BYTES = int(os.environ.get("MAX_VOICE_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+# A container header plus a fraction of a second of Opus. Below this there is no
+# speech to find, so the recording is a stray click or a recorder that produced
+# nothing - reject it before paying Scribe to tell us the same thing. A backstop
+# for a broken client rather than the main gate: the browser already refuses to
+# upload a clip that is too short or too quiet, and the bitrate this implies
+# varies by codec, so the floor is set well under one second of real audio.
+MIN_VOICE_UPLOAD_BYTES = int(os.environ.get("MIN_VOICE_UPLOAD_BYTES", "1024"))
 
 
 @app.post("/api/voice/ask")
@@ -382,6 +389,8 @@ async def api_voice_ask(
     content = await file.read()
     if not content:
         raise HTTPException(400, "no audio received")
+    if len(content) < MIN_VOICE_UPLOAD_BYTES:
+        raise HTTPException(400, "recording too short")
     if len(content) > MAX_VOICE_UPLOAD_BYTES:
         raise HTTPException(413, "recording too large")
 

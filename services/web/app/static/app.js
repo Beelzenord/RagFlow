@@ -46,6 +46,10 @@ const voice = {
   micStream: null,
   chunks: [],
   audioCtx: null,
+  // When the current recording started, and the loudest frame heard during it.
+  // Both gate the upload; see shouldSendRecording.
+  startedAt: 0,
+  meter: null,
   // The next free instant on the output timeline. Every chunk starts here, so
   // playback order is a consequence of arrival order and nothing else.
   nextStartTime: 0,
@@ -1145,14 +1149,19 @@ async function startRecording() {
     const type = voice.recorder?.mimeType || mime || "audio/webm";
     const blob = new Blob(voice.chunks, { type });
     voice.chunks = [];
+    const durationMs = voice.startedAt ? Date.now() - voice.startedAt : 0;
+    const peakRms = stopMicMeter();
+    voice.startedAt = 0;
     releaseMic();
     voice.recording = false;
     updateMicBtn();
-    if (blob.size > 0) sendVoiceTurn(blob);
-    else setVoiceStatus("");
+    if (shouldSendRecording(blob, durationMs, peakRms)) sendVoiceTurn(blob);
+    else setVoiceStatus(blob.size > 0 ? "I didn't hear anything - try again?" : "");
   });
 
+  voice.meter = startMicMeter(voice.micStream);
   voice.recorder.start();
+  voice.startedAt = Date.now();
   voice.recording = true;
   setVoiceStatus("Listening - click to send");
   updateMicBtn();
@@ -1170,6 +1179,9 @@ function stopRecording() {
 }
 
 function releaseMic() {
+  // The meter holds a node fed by the mic stream, so it has to go before the
+  // tracks do. Harmless when the stop handler already collected it.
+  stopMicMeter();
   // Leaving the track live keeps the browser's recording indicator on, which
   // reads as "still listening" long after the turn is over.
   voice.micStream?.getTracks().forEach((t) => t.stop());
@@ -1180,6 +1192,77 @@ function releaseMic() {
 function cancelVoiceTurn() {
   voice.abort?.abort();
   stopPlayback();
+}
+
+// A tap on the mic button, a mic that is muted at the OS level, or a recorder
+// that captured a room and no speaker all produce a blob with a non-zero size.
+// Uploading one costs a Scribe call to be told there is nothing in it, and
+// risks the model answering silence with a subtitle artifact instead. Both
+// gates below run entirely in the browser, so the cheapest rejection is also
+// the earliest one.
+const MIN_RECORDING_MS = 400;
+// RMS over [-1, 1] samples. Speech sits around 0.05 and up; room tone with
+// noiseSuppression on sits near 0.002. The floor is deliberately far below
+// speech - it is here to catch silence, not to judge how quietly someone talks.
+const MIN_RECORDING_RMS = 0.01;
+// How often the meter samples. Frequent enough to catch a short word, far too
+// coarse to cost anything.
+const METER_INTERVAL_MS = 100;
+
+// Watch the live mic and remember the loudest frame. Every failure path returns
+// null, which shouldSendRecording reads as "unknown" and lets the upload
+// through: a broken meter must never be able to swallow a real question.
+function startMicMeter(stream) {
+  try {
+    const ctx = ensureAudioCtx();
+    if (!ctx || typeof ctx.createAnalyser !== "function") return null;
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    const source = ctx.createMediaStreamSource(stream);
+    source.connect(analyser);
+
+    const frame = new Float32Array(analyser.fftSize);
+    const meter = { analyser, source, peak: 0, timer: 0 };
+    meter.timer = setInterval(() => {
+      try {
+        analyser.getFloatTimeDomainData(frame);
+        let sum = 0;
+        for (let i = 0; i < frame.length; i += 1) sum += frame[i] * frame[i];
+        const rms = Math.sqrt(sum / frame.length);
+        if (rms > meter.peak) meter.peak = rms;
+      } catch {
+        /* leave peak where it is; stopMicMeter still reports it */
+      }
+    }, METER_INTERVAL_MS);
+    return meter;
+  } catch {
+    return null;
+  }
+}
+
+// Returns the loudest RMS seen, or null when no meter ran. Never throws - it is
+// called from the recorder's stop handler, where an exception would strand the
+// UI in the recording state.
+function stopMicMeter() {
+  const meter = voice.meter;
+  voice.meter = null;
+  if (!meter) return null;
+  try {
+    clearInterval(meter.timer);
+    meter.source.disconnect();
+    meter.analyser.disconnect();
+  } catch {
+    /* the context may already be gone */
+  }
+  return meter.peak;
+}
+
+// Fail-open by construction: only a positive measurement can reject a clip.
+function shouldSendRecording(blob, durationMs, peakRms) {
+  if (!blob || blob.size <= 0) return false;
+  if (durationMs > 0 && durationMs < MIN_RECORDING_MS) return false;
+  if (peakRms !== null && peakRms < MIN_RECORDING_RMS) return false;
+  return true;
 }
 
 function ensureAudioCtx() {

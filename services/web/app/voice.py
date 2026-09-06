@@ -77,6 +77,80 @@ def voice_for_lang(lang: str | None) -> str:
     return ELEVENLABS_VOICES.get((lang or "").lower()) or ELEVENLABS_VOICE_ID
 
 
+# Whisper-family models - Scribe among them - do not answer silence with "".
+# They answer it with a confident-looking phrase learned from subtitle training
+# data. Those reach /query as if they were questions and cost an embedding call,
+# one or two LLM calls, and the TTS characters to read a nonsense answer aloud.
+#
+# Matching is exact against the *whole* normalised transcript, never a substring:
+# "tack" alone is an artifact, "tack, vad galler for semester?" is a question.
+# Genuinely ambiguous single words (ja/nej/yes/no) are deliberately absent. A
+# bare "yes" is useless to retrieval either way, but rejecting it would answer a
+# real utterance with "I didn't catch that", and a wasted turn is the cheaper of
+# those two mistakes.
+STT_ARTIFACTS: frozenset[str] = frozenset(
+    {
+        # English subtitle boilerplate
+        "thank you",
+        "thank you very much",
+        "thanks",
+        "thanks for watching",
+        "thank you for watching",
+        "please subscribe",
+        "subscribe",
+        "you",
+        "bye",
+        "bye bye",
+        "goodbye",
+        # Swedish equivalents
+        "tack",
+        "tack så mycket",
+        "tack för att du tittade",
+        "hej då",
+        # Non-lexical filler
+        "uh",
+        "um",
+        "mm",
+        "hmm",
+        "eh",
+        "öh",
+        "ah",
+        "oh",
+    }
+)
+
+# "ID?" normalises to two characters and is a real question, so the floor sits
+# below it. Nothing shorter carries a retrievable question.
+MIN_TRANSCRIPT_CHARS = 2
+
+_NON_WORD = re.compile(r"[^\w\s]", re.UNICODE)
+_WHITESPACE = re.compile(r"\s+")
+
+
+def _normalise(text: str) -> str:
+    """Lowercase, drop punctuation, collapse whitespace. Diacritics are kept -
+    the Swedish artifacts are listed as they are actually spelled."""
+    return _WHITESPACE.sub(" ", _NON_WORD.sub("", text)).strip().lower()
+
+
+def is_junk_transcript(text: str) -> bool:
+    """True when a transcript is silence, noise or a known STT artifact.
+
+    Deliberately conservative: it never counts words, because a one-word
+    question ("Semester?") is ordinary in this corpus. Rejecting a real question
+    is worse than paying for one wasted turn, so every rule here is either an
+    exact artifact match or a length floor no real question can fall under.
+
+    Subsumes the empty and whitespace-only cases - both normalise to "".
+    """
+    norm = _normalise(text)
+    if len(norm) < MIN_TRANSCRIPT_CHARS:
+        return True
+    if not any(ch.isalnum() for ch in norm):
+        return True
+    return norm in STT_ARTIFACTS
+
+
 # A sentence ends at .!?… possibly followed by a closing quote or bracket, and
 # then whitespace. Requiring the whitespace means the last sentence of a stream
 # never matches, which is correct: flush() owns the tail.
@@ -232,7 +306,12 @@ async def run_turn(
         yield ndjson({"type": "error", "message": str(exc)})
         return
 
-    if not transcript:
+    # Stops here, before the embedding call, the rewrite, the answer and the
+    # characters spent speaking it. `transcript` is logged rather than dropped
+    # silently so a real question caught by this filter is visible as a false
+    # positive instead of looking like a failed recording.
+    if is_junk_transcript(transcript):
+        log.info("discarded non-speech transcript: %r", transcript[:80])
         yield ndjson({"type": "error", "message": "I didn't catch that - try again?"})
         return
 
