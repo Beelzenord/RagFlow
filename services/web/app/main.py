@@ -95,8 +95,9 @@ async def api_me(request: Request) -> JSONResponse:
             "role": auth.role(request),
             "can_write": auth.is_admin(request),
             # Lets the UI hide the microphone rather than offer a control that
-            # would answer 503.
-            "voice_enabled": voice.enabled(),
+            # would answer 503 (not configured) or 403 (not an admin). Advisory
+            # only - require_voice on the endpoint is what actually enforces it.
+            "voice_enabled": voice.enabled() and auth.is_admin(request),
         }
     )
 
@@ -142,6 +143,19 @@ def require_admin(request: Request) -> None:
     """
     if not auth.is_admin(request):
         raise HTTPException(403, "this account may ask questions, not manage documents")
+
+
+def require_voice(request: Request) -> None:
+    """Voice is an admin-only feature.
+
+    Separate from require_admin because the refusal is not about managing the
+    corpus - a reader may still ask this same question in writing - and a 403
+    that says so is the difference between a understood restriction and a bug
+    report. Hiding the microphone in the UI is not enforcing it: /api/me is
+    advisory, and the endpoint is a curl away without this.
+    """
+    if not auth.is_admin(request):
+        raise HTTPException(403, "voice is limited to admin accounts; ask in writing instead")
 
 
 def _auth_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -367,7 +381,7 @@ MAX_VOICE_UPLOAD_BYTES = int(os.environ.get("MAX_VOICE_UPLOAD_BYTES", str(25 * 1
 MIN_VOICE_UPLOAD_BYTES = int(os.environ.get("MIN_VOICE_UPLOAD_BYTES", "1024"))
 
 
-@app.post("/api/voice/ask")
+@app.post("/api/voice/ask", dependencies=[Depends(require_voice)])
 async def api_voice_ask(
     request: Request,
     file: UploadFile = File(...),

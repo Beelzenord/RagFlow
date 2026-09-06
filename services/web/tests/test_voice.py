@@ -193,6 +193,49 @@ class VoiceEndpointTests(unittest.TestCase):
         resp = self.ask(scribe=(200, {"text": "..."}), lang="en")
         self.assertEqual([e["type"] for e in self.events(resp)], ["error"])
 
+    def test_voice_is_admin_only(self) -> None:
+        """A reader may ask this same question in writing. The spoken path is
+        not theirs, and hiding the microphone is not what stops them."""
+        from app import auth as auth_mod
+
+        with mock.patch.object(auth_mod, "is_admin", return_value=False):
+            resp = self.ask(lang="en")
+        self.assertEqual(resp.status_code, 403)
+        self.assertIn("admin", resp.json()["detail"])
+
+    def test_a_refused_reader_costs_no_speech_to_text_call(self) -> None:
+        """The guard is a route dependency, so it runs before the body. A
+        reader hammering the endpoint must not be able to spend the STT quota."""
+        from app import auth as auth_mod
+
+        reached: list[int] = []
+
+        async def fake_post(*_a: object, **_kw: object) -> httpx.Response:
+            reached.append(1)
+            raise AssertionError("Scribe was called for a refused request")
+
+        with TestClient(self.main.app, raise_server_exceptions=False) as client:
+            setattr(client.app.state.http, "post", fake_post)
+            with mock.patch.object(auth_mod, "is_admin", return_value=False):
+                resp = client.post(
+                    "/api/voice/ask",
+                    files={"file": ("audio.webm", b"\x00" * 2048, "audio/webm")},
+                    data={"lang": "en"},
+                )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(reached, [])
+
+    def test_me_hides_the_microphone_from_a_reader(self) -> None:
+        """Advisory, not the enforcement - but a control that would only 403 is
+        worse than no control at all."""
+        from app import auth as auth_mod
+
+        with TestClient(self.main.app) as client:
+            with mock.patch.object(auth_mod, "is_admin", return_value=False):
+                self.assertIs(client.get("/api/me").json()["voice_enabled"], False)
+            # Same server, same key: only the role differs.
+            self.assertIs(client.get("/api/me").json()["voice_enabled"], True)
+
     def test_the_dead_endpoints_are_gone(self) -> None:
         paths = {r.path for r in self.main.app.routes if hasattr(r, "path")}
         self.assertNotIn("/api/voice/tts", paths)
