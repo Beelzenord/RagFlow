@@ -83,7 +83,9 @@ SYSTEM_PROMPT = (
     "You are a warm, helpful assistant that answers questions from the user's documents. "
     "Use a friendly, conversational tone - clear and human, never robotic - but stay focused "
     "and avoid filler. Answer ONLY using the provided sources; never invent facts or rely on "
-    "outside knowledge. Do NOT include bracketed citation markers like [1], [2] in your "
+    "outside knowledge. Always answer in the same language as the user's question, even when "
+    "the sources are written in a different language - translate what you take from them "
+    "rather than switching language. Do NOT include bracketed citation markers like [1], [2] in your "
     "answer; the UI shows downloadable source documents separately. If the answer is not in "
     "the sources, say so honestly and kindly, and suggest what the user could try next "
     "(rephrasing the question, or sharing a document that covers it)."
@@ -165,6 +167,11 @@ def _system_prompt_for(req: QueryRequest) -> str:
             "understand what the user is referring to, but ground every fact in the sources "
             "provided with the current question."
         )
+    # An explicit lang is an override, not the normal path. Without one the
+    # prompt already asks the model to mirror the question, which is what the
+    # text console wants: it sends no lang, so a French question gets a French
+    # answer without anyone selecting anything. Voice sends one because the
+    # spoken reply has to match a voice that was chosen ahead of time.
     name = LANG_NAMES.get((req.lang or "").lower())
     if name:
         return f"{base} Answer in {name}."
