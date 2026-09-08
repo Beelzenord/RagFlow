@@ -98,7 +98,12 @@ async def api_me(request: Request) -> JSONResponse:
             # would answer 503 (not configured) or 403 (not an admin). Advisory
             # only - require_voice on the endpoint is what actually enforces it.
             "voice_enabled": voice.enabled() and auth.is_admin(request),
-        }
+        },
+        # Per-user and role-bearing: a cached copy is a different person's
+        # answer. Without this the response carries no cache directive at all,
+        # so a browser may reuse one heuristically - which is how a reader keeps
+        # being shown an admin's microphone across a rebuild.
+        headers={"cache-control": "no-store"},
     )
 
 

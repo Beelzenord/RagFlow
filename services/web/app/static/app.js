@@ -494,9 +494,10 @@ async function initSession() {
   document.body.classList.toggle("can-write", state.canWrite);
   applyRole();
 
-  // Without an ElevenLabs key every voice request would 503, so the control is
-  // withheld rather than offered and then refused.
-  if (info.voice_enabled === true) initVoice();
+  // Without an ElevenLabs key every voice request would 503, and without the
+  // admin role it would 403, so the control is withheld rather than offered and
+  // then refused.
+  setVoiceAvailable(info.voice_enabled === true);
 
   // No logout_url means there is no session to end - an open console with
   // neither a password nor Microsoft sign-in in front of it.
@@ -1064,6 +1065,20 @@ function setStatus(node, text, kind) {
 // order and the missing short sentences came from. The written chat path is not
 // touched: this shares the renderers and state.turns, and nothing else.
 // ---------------------------------------------------------------------------
+
+// Called unconditionally, so the server's answer decides every time. initVoice
+// only ever revealed the controls, which left their visibility resting on one
+// fetch having been both fresh and successful - and the session lookup swallows
+// its own failures. Withdrawing explicitly means a stale, failed or slow answer
+// leaves a reader with no microphone rather than one the server will refuse.
+function setVoiceAvailable(available) {
+  if (!els.voiceControls) return;
+  if (!available) {
+    els.voiceControls.hidden = true;
+    return;
+  }
+  initVoice();
+}
 
 function initVoice() {
   if (!els.micBtn || !els.voiceControls) return;

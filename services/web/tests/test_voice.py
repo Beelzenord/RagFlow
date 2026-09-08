@@ -225,6 +225,13 @@ class VoiceEndpointTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(reached, [])
 
+    def test_me_is_never_cached(self) -> None:
+        """The response carries a role. A browser reusing one heuristically is
+        how a reader keeps being shown an admin's microphone after a redeploy."""
+        with TestClient(self.main.app) as client:
+            resp = client.get("/api/me")
+        self.assertEqual(resp.headers.get("cache-control"), "no-store")
+
     def test_me_hides_the_microphone_from_a_reader(self) -> None:
         """Advisory, not the enforcement - but a control that would only 403 is
         worse than no control at all."""
