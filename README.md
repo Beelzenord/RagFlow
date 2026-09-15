@@ -68,8 +68,32 @@ If you switch embedding models, run a migration to alter the column dimension
 curl -X POST http://localhost:8001/ingest \
   -H "x-api-key: $SERVICE_API_KEY" \
   -F "file=@brochure.pdf" \
-  -F "collection=marketing"
+  -F "collection=marketing" \
+  -F "scope=EU,CH"
 # → {"document_id": "…", "status": "processing"}
+```
+
+`scope` is a comma-separated list of region or group codes from the vocabulary
+in `db/migrations/05-document-scoping.sql` — `GLOBAL`, `EU`, `NORDICS`, `DACH`,
+or any ISO country code seeded there. Groups are expanded to their member
+countries when the document is tagged, so `EU` stores 27 rows in
+`applies_to_regions` and the query path stays a plain array overlap. An unknown
+code is refused with a 400 rather than being widened to global.
+
+It is **optional at the API** so this command, `scripts/smoke_test.sh` and the
+n8n ingest workflow all keep working, but **required in the web console**, where
+a person is making the choice. An upload with no scope is global and is listed
+as `unscoped`, not as a deliberate decision — see
+[docs/document-scoping.md](docs/document-scoping.md).
+
+**The retrieval filter does not use any of this yet.** Tagging exists so that it
+can be done and checked before a tagging mistake can produce a wrong answer.
+Retagging never requires reprocessing: scope is metadata, not vectors.
+
+Read the vocabulary the console's picker is built from:
+
+```bash
+curl -H "x-api-key: $SERVICE_API_KEY" http://localhost:8001/scopes
 ```
 
 Poll status:

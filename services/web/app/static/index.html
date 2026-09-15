@@ -58,6 +58,15 @@
           <span>Collection (optional)</span>
           <input type="text" id="collection-input" placeholder="e.g. handbook" />
         </label>
+        <label class="field">
+          <span>Applies to</span>
+          <select id="scope-input" multiple size="5" required
+                  aria-describedby="scope-hint"></select>
+          <small id="scope-hint" class="hint">
+            Who these documents apply to. Pick Everywhere for a global policy, or
+            one or more regions. Hold Cmd/Ctrl to select several.
+          </small>
+        </label>
         <button type="submit" id="upload-btn">Add to queue</button>
         <div class="progress" id="upload-progress" hidden aria-hidden="true">
           <div class="progress-bar" id="upload-bar"></div>

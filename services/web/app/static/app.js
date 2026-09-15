@@ -63,6 +63,7 @@ const els = {
   uploadForm: document.getElementById("upload-form"),
   fileInput: document.getElementById("file-input"),
   collectionInput: document.getElementById("collection-input"),
+  scopeInput: document.getElementById("scope-input"),
   uploadBtn: document.getElementById("upload-btn"),
   uploadStatus: document.getElementById("upload-status"),
   uploadProgress: document.getElementById("upload-progress"),
@@ -141,6 +142,7 @@ function normalizeDoc(d) {
     error_message: d.error_message,
     filename: d.original_filename || d.filename || d.id,
     collection: d.collection,
+    scopeLabels: Array.isArray(d.scope_labels) ? d.scope_labels : null,
   };
 }
 
@@ -208,6 +210,17 @@ function renderDocs() {
     const idSpan = document.createElement("span");
     idSpan.textContent = `id: ${d.id.slice(0, 8)}...`;
     meta.appendChild(idSpan);
+    const scopeSpan = document.createElement("span");
+    if (d.scopeLabels && d.scopeLabels.length) {
+      scopeSpan.className = "scope-badge";
+      scopeSpan.textContent = d.scopeLabels.join(", ");
+    } else {
+      // Not "Everywhere": nobody chose that. Saying "unscoped" is what makes a
+      // forgotten tag findable instead of indistinguishable from a decision.
+      scopeSpan.className = "scope-badge unscoped";
+      scopeSpan.textContent = "unscoped";
+    }
+    meta.appendChild(scopeSpan);
     if (d.collection) {
       const c = document.createElement("span");
       c.textContent = `collection: ${d.collection}`;
@@ -494,6 +507,10 @@ async function initSession() {
   document.body.classList.toggle("can-write", state.canWrite);
   applyRole();
 
+  // The picker is built from the database so it can never offer a code the
+  // ingestion service would then refuse. Admin-only, like the endpoint.
+  if (state.canWrite) loadScopes();
+
   // Without an ElevenLabs key every voice request would 503, so the control is
   // withheld rather than offered and then refused.
   if (info.voice_enabled === true) initVoice();
@@ -552,11 +569,57 @@ function uploadWithProgress(formData, onProgress) {
   });
 }
 
+// Groups first, then countries. A failure here leaves the picker empty and the
+// form unsubmittable, which is the honest outcome: without a vocabulary there is
+// no way to tag, and guessing a default is the mistake this design rules out.
+async function loadScopes() {
+  if (!els.scopeInput) return;
+  try {
+    const resp = await fetch("/api/scopes");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    els.scopeInput.textContent = "";
+    const add = (label, items) => {
+      if (!items?.length) return;
+      const grp = document.createElement("optgroup");
+      grp.label = label;
+      for (const it of items) {
+        const opt = document.createElement("option");
+        opt.value = it.code;
+        opt.textContent = it.label;
+        grp.appendChild(opt);
+      }
+      els.scopeInput.appendChild(grp);
+    };
+    add("Groups", data.groups);
+    add("Countries", data.regions);
+  } catch (err) {
+    console.warn("scope vocabulary unavailable", err);
+    setStatus(els.uploadStatus, "Could not load the scope list - reload to retry", "error");
+  }
+}
+
+function selectedScope() {
+  if (!els.scopeInput) return null;
+  const codes = Array.from(els.scopeInput.selectedOptions).map((o) => o.value);
+  return codes.length ? codes.join(",") : null;
+}
+
+// Labels for the queue row, so a mis-selection is visible before the upload
+// finishes rather than after.
+function selectedScopeLabels() {
+  if (!els.scopeInput) return null;
+  const labels = Array.from(els.scopeInput.selectedOptions).map((o) => o.textContent);
+  return labels.length ? labels.join(", ") : null;
+}
+
 els.uploadForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const files = Array.from(els.fileInput.files || []);
   if (!files.length) return;
   const collection = els.collectionInput.value.trim() || null;
+  const scope = selectedScope();
+  const scopeLabels = selectedScopeLabels();
 
   for (const file of files) {
     state.queue.push({
@@ -565,6 +628,8 @@ els.uploadForm.addEventListener("submit", (e) => {
       filename: file.name,
       size: file.size,
       collection,
+      scope,
+      scopeLabels,
       status: "queued",
       uploadFrac: 0,
       docId: null,
@@ -599,6 +664,7 @@ async function pumpQueue() {
   const fd = new FormData();
   fd.append("file", next.file);
   if (next.collection) fd.append("collection", next.collection);
+  if (next.scope) fd.append("scope", next.scope);
 
   try {
     const { status, body } = await uploadWithProgress(fd, (loaded, total) => {
@@ -717,6 +783,12 @@ function renderQueue() {
       const c = document.createElement("span");
       c.textContent = `collection: ${it.collection}`;
       meta.appendChild(c);
+    }
+    if (it.scopeLabels) {
+      const sc = document.createElement("span");
+      sc.className = "scope-badge";
+      sc.textContent = it.scopeLabels;
+      meta.appendChild(sc);
     }
     if (isIndexed(it.status) && typeof it.chunkCount === "number") {
       const cc = document.createElement("span");

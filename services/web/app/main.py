@@ -176,6 +176,7 @@ async def api_upload(
     file: UploadFile = File(...),
     user_id: str | None = Form(default=None),
     collection: str | None = Form(default=None),
+    scope: str | None = Form(default=None),
 ) -> JSONResponse:
     content = await file.read()
     files = {"file": (file.filename or "upload.bin", content, file.content_type or "application/octet-stream")}
@@ -184,6 +185,11 @@ async def api_upload(
         data["user_id"] = user_id
     if collection:
         data["collection"] = collection
+    # Passed through untouched. The vocabulary lives in the database and the
+    # ingestion service is what reads it, so validating here would be a second
+    # copy of the rules to keep in step - and it answers 400 on an unknown code.
+    if scope:
+        data["scope"] = scope
 
     client: httpx.AsyncClient = request.app.state.http
     try:
@@ -193,6 +199,22 @@ async def api_upload(
             files=files,
             data=data,
         )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
+    return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
+
+
+@app.get("/api/scopes", dependencies=[Depends(require_admin)])
+async def api_scopes(request: Request) -> JSONResponse:
+    """The scope vocabulary, for the upload picker.
+
+    Proxied rather than read here: this service holds no database connection by
+    design, and the vocabulary belongs to whoever writes documents against it.
+    Admin-only because only admins upload.
+    """
+    client: httpx.AsyncClient = request.app.state.http
+    try:
+        resp = await client.get(f"{INGESTION_URL}/scopes", headers=_auth_headers())
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))

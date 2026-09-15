@@ -913,3 +913,18 @@ button:disabled {
   font-size: 12px;
   white-space: pre-wrap;
 }
+
+/* Scope badge on queue and document rows. "unscoped" is deliberately the
+   noticeable one: a forgotten tag has to look different from a deliberate
+   choice, or it reads as "global" and nobody ever fixes it. */
+.scope-badge {
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.6rem;
+  border: 1px solid var(--border, #3a3a3a);
+  font-size: 0.85em;
+}
+
+.scope-badge.unscoped {
+  border-style: dashed;
+  opacity: 0.75;
+}

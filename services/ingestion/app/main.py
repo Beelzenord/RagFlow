@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from rag_shared.security import require_service_key
 from rag_shared.settings import settings
 
 from .pipeline import run_ingestion
+from .scoping import ScopeError, resolve_scope
 from .storage import resolve_storage_file, save_original
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -51,16 +53,34 @@ async def ingest(
     file: UploadFile = File(...),
     user_id: str | None = Form(default=None),
     collection: str | None = Form(default=None),
+    scope: str | None = Form(default=None),
 ) -> dict[str, Any]:
+    """`scope` is a comma-separated list of region or group codes, e.g. "EU,CH".
+
+    Optional here on purpose. The console requires a choice, because that is
+    where a person is deciding; the API does not, so smoke_test.sh and the n8n
+    ingest workflow keep working. An upload with no scope is global and is
+    listed as unscoped rather than quietly treated as deliberate.
+    """
     content = await file.read()
     _validate_upload(file, len(content))
 
     async with session_scope() as session:
+        # Before the row is written: a rejected scope must not leave a document
+        # behind, and the expansion needs the same session to read the
+        # vocabulary tables.
+        try:
+            resolved = await resolve_scope(session, scope)
+        except ScopeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
         row = await session.execute(
             text(
                 "INSERT INTO documents (original_filename, file_type, storage_path, "
-                "user_id, collection, status) "
-                "VALUES (:n, :t, :p, :u, :c, 'uploaded') RETURNING id"
+                "user_id, collection, status, "
+                "applies_to_regions, scope_entries, scope_labels) "
+                "VALUES (:n, :t, :p, :u, :c, 'uploaded', "
+                ":regions, CAST(:entries AS jsonb), :labels) RETURNING id"
             ),
             {
                 "n": file.filename or "upload.bin",
@@ -68,6 +88,9 @@ async def ingest(
                 "p": "",  # filled below once we know the path
                 "u": user_id,
                 "c": collection,
+                "regions": resolved.regions,
+                "entries": json.dumps(resolved.entries),
+                "labels": resolved.labels,
             },
         )
         document_id = str(row.scalar_one())
@@ -81,6 +104,37 @@ async def ingest(
     return {"document_id": document_id, "status": "processing"}
 
 
+@app.get("/scopes", dependencies=[Depends(require_service_key)])
+async def list_scopes() -> dict[str, Any]:
+    """The scope vocabulary the console's picker is built from.
+
+    Served from the tables rather than a constant so that editing the
+    vocabulary is a migration, not a frontend release - and so the picker can
+    never offer a code that resolve_scope would then refuse.
+    """
+    async with session_scope() as session:
+        groups = [
+            dict(r)
+            for r in (
+                await session.execute(
+                    text(
+                        "SELECT code, label, specificity, member_regions "
+                        "FROM region_groups ORDER BY specificity, label"
+                    )
+                )
+            ).mappings()
+        ]
+        regions = [
+            dict(r)
+            for r in (
+                await session.execute(
+                    text("SELECT code, label FROM regions ORDER BY label")
+                )
+            ).mappings()
+        ]
+    return {"groups": groups, "regions": regions}
+
+
 @app.get("/documents/{document_id}", dependencies=[Depends(require_service_key)])
 async def get_document(document_id: UUID) -> dict[str, Any]:
     async with session_scope() as session:
@@ -89,6 +143,7 @@ async def get_document(document_id: UUID) -> dict[str, Any]:
                 text(
                     "SELECT id, original_filename, file_type, status, error_message, "
                     "       collection, user_id, created_at, updated_at, "
+                    "       applies_to_regions, scope_entries, scope_labels, sensitivity, "
                     "       (SELECT count(*) FROM document_chunks WHERE document_id = d.id) AS chunk_count "
                     "FROM documents d WHERE id = :id"
                 ),
@@ -148,6 +203,7 @@ async def list_documents(
     sql = (
         "SELECT id, original_filename, file_type, status, error_message, "
         "       collection, user_id, created_at, updated_at, "
+        "       applies_to_regions, scope_entries, scope_labels, sensitivity, "
         "       (SELECT count(*) FROM document_chunks WHERE document_id = d.id) AS chunk_count "
         f"FROM documents d {where} "
         "ORDER BY created_at DESC LIMIT :limit"
