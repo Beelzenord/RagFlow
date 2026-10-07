@@ -1,6 +1,11 @@
 # Document scoping — regional and future dimensions
 
-Status: **design, not built.** Nothing in this document exists in the schema yet.
+Status: **partly built.** Documents can be tagged at upload, retagged without
+reprocessing, listed and filtered on the filing page (`/admin`), and admins enable
+countries from a full ISO catalogue. **Retrieval does not use scope yet** — every
+answer is what it would be without any of this. Group editing, the query filter,
+precedence and tier starvation are still design.
+
 It records the decisions and the reasoning behind them so that whoever picks this
 up — including a later you — does not have to re-derive them.
 
@@ -145,9 +150,32 @@ to be read.
    re-expands the affected documents.
 
 **Retagging never requires reprocessing.** Scope is metadata, not vectors: no
-LlamaParse, no re-embedding, effective immediately. Unlike changing the embedding
-model, a wrong tag is cheap to fix. That should lower the stakes on rollout
-considerably.
+LlamaParse, no re-embedding, effective immediately. `PATCH /documents/{id}/scope`
+and the bulk `PATCH /documents/scope` write the three scope columns and nothing
+else, and the bulk form is all or nothing. Unlike changing the embedding model, a
+wrong tag is cheap to fix. That should lower the stakes on rollout considerably.
+
+(Until those endpoints existed this paragraph was true of the data model and false
+in practice: the only way to change a tag was to delete and re-upload, which is
+exactly the reprocessing it promised to avoid.)
+
+### Countries: enabled, not authored
+
+Migration 07 holds every ISO 3166-1 country, switched off, and an `active` flag.
+Admins enable the markets they operate in on the filing page; the pickers offer
+only enabled countries; `resolve_scope` refuses a disabled one with a message
+that says so rather than calling it unknown. This keeps the vocabulary closed —
+nobody types a code — while letting it grow without a migration.
+
+Enabling is safe: a country that was not in the vocabulary is in no existing tag,
+so nothing goes stale. Disabling is refused while a document or a group uses the
+country, because a tag the picker can no longer show is a tag nobody can edit
+back. `resolve_scope` takes `FOR SHARE` on the countries it reads and the disable
+takes `FOR UPDATE`, so a tag and a disable naming the same country serialise
+instead of racing past the usage count.
+
+Kosovo (`XK`) is added by hand: it is user-assigned, not an official ISO code, and
+is what payroll and HR systems use.
 
 ## Identity: a claim, not a group
 
@@ -273,8 +301,12 @@ These are genuinely unsettled, not rhetorical.
    bounded query per tier? Needs real data to choose.
 2. **Chunk-level timing** — is the mixed handbook a day-one problem or a later
    one? Depends on whether admins can be asked to split files.
-3. **Vocabulary ownership** — who maintains `region_groups`, and does it need a
-   UI or is a migration acceptable?
+3. **Group authoring** — countries are now enabled from the filing page, but
+   `region_groups` is still edited by migration. A UI for it is not just a form:
+   because groups are expanded at tag time, changing a group's members leaves
+   every document already tagged with it on the old list. It needs usage counts
+   before an edit, a re-expand action over the affected documents, and a refusal
+   to delete a group that documents use.
 4. **Effective dating** — worth landing with the scope work, or a separate pass?
    It shares the metadata plumbing but has its own UI cost.
 5. **Multiple dimensions at once** — when department arrives, do dimensions AND

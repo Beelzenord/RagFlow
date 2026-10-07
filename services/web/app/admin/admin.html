@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Filing - Rahmqvist Assistant</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("rag.theme.v1");
+        document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
+      } catch (_) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+</head>
+<body class="admin-page">
+  <header class="topbar">
+    <div class="topbar-brand">
+      <a class="brand-logo" href="/" aria-label="Rahmqvist"></a>
+      <h1>Filing</h1>
+      <span class="hint">Every document in the corpus, what it applies to, and the countries you operate in.</span>
+    </div>
+    <a class="btn-secondary admin-back" href="/">Back to chat</a>
+  </header>
+
+  <nav class="admin-tabs" role="tablist" aria-label="Filing sections">
+    <button type="button" role="tab" id="tab-documents" aria-controls="panel-documents" aria-selected="true">Documents</button>
+    <button type="button" role="tab" id="tab-countries" aria-controls="panel-countries" aria-selected="false">Countries</button>
+  </nav>
+
+  <main class="admin-main">
+    <!-- ============================== Documents ============================== -->
+    <section class="panel admin-panel" id="panel-documents" role="tabpanel" aria-labelledby="tab-documents">
+      <form id="doc-filters" class="admin-filters" autocomplete="off">
+        <label class="field">
+          <span>Search</span>
+          <input type="text" id="f-q" placeholder="Filename" />
+        </label>
+        <label class="field">
+          <span>Tagged with</span>
+          <select id="f-scope">
+            <option value="">Anything</option>
+            <option value="unscoped">Unscoped</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Status</span>
+          <select id="f-status">
+            <option value="">Any</option>
+            <option value="completed">Completed</option>
+            <option value="degraded">Degraded</option>
+            <option value="failed">Failed</option>
+            <option value="processing">Processing</option>
+            <option value="uploaded">Uploaded</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Collection</span>
+          <input type="text" id="f-collection" placeholder="Any" />
+        </label>
+        <label class="field">
+          <span>Order</span>
+          <select id="f-sort">
+            <option value="attention">Needs attention first</option>
+            <option value="created_desc">Newest first</option>
+            <option value="created_asc">Oldest first</option>
+            <option value="filename">Filename</option>
+          </select>
+        </label>
+      </form>
+
+      <div class="admin-toolbar">
+        <span id="selection-count" class="muted">Nothing selected</span>
+        <button type="button" id="bulk-retag" class="btn-secondary" disabled>Retag selected</button>
+        <button type="button" id="bulk-delete" class="btn-danger" disabled>Delete selected</button>
+        <span class="admin-toolbar-spacer"></span>
+        <button type="button" id="backfill" class="btn-secondary" title="Hash documents uploaded before duplicate detection existed, so re-uploads of them are caught too">Check older files for duplicates</button>
+      </div>
+
+      <p class="status" id="doc-status" aria-live="polite"></p>
+
+      <div class="admin-table-wrap">
+        <table class="admin-table" id="doc-table">
+          <thead>
+            <tr>
+              <th scope="col" class="col-check"><input type="checkbox" id="select-all" aria-label="Select all on this page" /></th>
+              <th scope="col">Document</th>
+              <th scope="col">Status</th>
+              <th scope="col">Applies to</th>
+              <th scope="col" class="num">Chunks</th>
+              <th scope="col">Collection</th>
+              <th scope="col">Uploaded</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="doc-rows"></tbody>
+        </table>
+        <p class="muted admin-empty" id="doc-empty" hidden>No documents match these filters.</p>
+      </div>
+
+      <div class="admin-pager">
+        <button type="button" id="page-prev" class="btn-secondary">Previous</button>
+        <span id="page-info" class="muted"></span>
+        <button type="button" id="page-next" class="btn-secondary">Next</button>
+      </div>
+    </section>
+
+    <!-- ============================== Countries ============================== -->
+    <section class="panel admin-panel" id="panel-countries" role="tabpanel" aria-labelledby="tab-countries" hidden>
+      <div class="admin-filters">
+        <label class="field">
+          <span>Find a country</span>
+          <input type="text" id="c-q" placeholder="Name or code, e.g. Japan or JP" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Show</span>
+          <select id="c-show">
+            <option value="all">All</option>
+            <option value="active">Enabled</option>
+            <option value="inactive">Not enabled</option>
+          </select>
+        </label>
+      </div>
+      <p class="muted admin-explain">
+        Enabled countries appear in the upload and retag pickers. Enabling one is always
+        safe. A country that documents or a group still use cannot be disabled - retag
+        those documents first.
+      </p>
+      <p class="status" id="country-status" aria-live="polite"></p>
+      <p class="muted" id="country-summary"></p>
+      <div class="admin-table-wrap">
+        <table class="admin-table" id="country-table">
+          <thead>
+            <tr>
+              <th scope="col">Country</th>
+              <th scope="col">Code</th>
+              <th scope="col">Used by</th>
+              <th scope="col"><span class="visually-hidden">Enabled</span></th>
+            </tr>
+          </thead>
+          <tbody id="country-rows"></tbody>
+        </table>
+        <p class="muted admin-empty" id="country-empty" hidden>No country matches.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- Retag dialog: used for one row and for a selection. -->
+  <dialog id="retag-dialog" class="admin-dialog" aria-labelledby="retag-title">
+    <form method="dialog" id="retag-form">
+      <h2 id="retag-title">Retag</h2>
+      <p class="muted" id="retag-target"></p>
+      <label class="field">
+        <span>Applies to</span>
+        <select id="retag-scope" multiple size="10" required></select>
+        <small class="hint">Pick Everywhere for a global policy, or one or more regions. Hold Cmd/Ctrl to select several.</small>
+      </label>
+      <p class="status error" id="retag-error" aria-live="assertive"></p>
+      <div class="admin-dialog-actions">
+        <button type="button" id="retag-cancel" class="btn-secondary">Cancel</button>
+        <button type="submit" id="retag-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/admin/admin.js"></script>
+</body>
+</html>

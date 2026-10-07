@@ -928,3 +928,145 @@ button:disabled {
   border-style: dashed;
   opacity: 0.75;
 }
+
+/* ===================================================================== */
+/* Filing page (/admin). Shares the console's tokens; only layout is new. */
+/* ===================================================================== */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.admin-page .topbar { gap: 12px; }
+.admin-back { text-decoration: none; margin-left: auto; }
+
+.admin-tabs {
+  display: flex;
+  gap: 4px;
+  max-width: 1200px;
+  margin: 16px auto 0;
+  padding: 0 16px;
+}
+.admin-tabs button {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  padding: 8px 16px;
+}
+.admin-tabs button[aria-selected="true"] {
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--panel-border);
+}
+
+.admin-main {
+  max-width: 1200px;
+  margin: 0 auto 32px;
+  padding: 0 16px;
+}
+.admin-panel { border-top-left-radius: 0; }
+
+.admin-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+.admin-filters .field { min-width: 160px; flex: 1 1 160px; margin: 0; }
+
+.admin-explain { margin: 12px 0 0; font-size: 13px; }
+
+.admin-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+.admin-toolbar-spacer { flex: 1; }
+
+.admin-table-wrap {
+  margin-top: 8px;
+  overflow-x: auto;
+}
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.admin-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 8px;
+  border-bottom: 1px solid var(--panel-border);
+  white-space: nowrap;
+}
+.admin-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--panel-border);
+  vertical-align: top;
+}
+.admin-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.admin-table .col-check { width: 28px; }
+.admin-table .col-actions { text-align: right; white-space: nowrap; }
+.admin-table .col-date { white-space: nowrap; }
+.admin-table tr.inactive td:first-child { color: var(--muted); }
+
+.admin-doc-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  word-break: break-word;
+}
+.admin-doc-error { margin-top: 4px; color: var(--err); font-size: 12px; }
+
+.scope-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.badge.duplicate { color: var(--warn); border-color: var(--warn); }
+
+.admin-empty { padding: 16px 8px; }
+
+.admin-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.admin-dialog {
+  width: min(480px, calc(100vw - 32px));
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 20px;
+}
+.admin-dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+.admin-dialog h2 { margin: 0 0 4px; font-size: 16px; }
+.admin-dialog select { width: 100%; }
+.admin-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* Sidebar link from the console to the filing page. */
+.docs-admin-link {
+  display: inline-block;
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.docs-admin-link:hover { text-decoration: underline; }

@@ -100,11 +100,18 @@ async def resolve_scope(session, raw: str | None) -> ResolvedScope:
             )
         ).mappings()
     }
+    # FOR SHARE: holds these countries until the caller's transaction commits,
+    # so an admin disabling one of them waits for this tag to land (and then
+    # sees it, and refuses) instead of racing it. Shared, so two uploads naming
+    # the same country never wait on each other.
     regions = {
         r["code"]: r
         for r in (
             await session.execute(
-                text("SELECT code, label FROM regions WHERE code = ANY(:codes)"),
+                text(
+                    "SELECT code, label, active FROM regions "
+                    "WHERE code = ANY(:codes) FOR SHARE"
+                ),
                 {"codes": codes},
             )
         ).mappings()
@@ -113,6 +120,17 @@ async def resolve_scope(session, raw: str | None) -> ResolvedScope:
     unknown = [c for c in codes if c not in groups and c not in regions]
     if unknown:
         raise ScopeError(f"unknown scope(s): {', '.join(unknown)}")
+
+    # Told apart from "unknown" on purpose. JP is a real country the firm has
+    # simply not switched on, and the fix is a click on the Countries page - not
+    # a typo to go hunting for. Group members are not re-checked here: a country
+    # that belongs to a group cannot be disabled in the first place.
+    inactive = [c for c in codes if c in regions and not regions[c]["active"]]
+    if inactive:
+        raise ScopeError(
+            f"{', '.join(inactive)} {'is' if len(inactive) == 1 else 'are'} not enabled"
+            " - enable it on the Countries page"
+        )
 
     leaves: list[str] = []
     entries: list[dict[str, Any]] = []

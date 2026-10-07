@@ -28,9 +28,13 @@ GROUPS = {
     "EMPTY": {"code": "EMPTY", "label": "Empty", "member_regions": [], "specificity": 1},
 }
 REGIONS = {
-    "DE": {"code": "DE", "label": "Germany"},
-    "CH": {"code": "CH", "label": "Switzerland"},
-    "SE": {"code": "SE", "label": "Sweden"},
+    "DE": {"code": "DE", "label": "Germany", "active": True},
+    "CH": {"code": "CH", "label": "Switzerland", "active": True},
+    "SE": {"code": "SE", "label": "Sweden", "active": True},
+    # In the catalogue but not switched on - the state every country outside
+    # the starter set is in until an admin enables it.
+    "JP": {"code": "JP", "label": "Japan", "active": False},
+    "KR": {"code": "KR", "label": "South Korea", "active": False},
 }
 
 
@@ -125,6 +129,39 @@ class ResolveScopeTests(unittest.TestCase):
         error, so say it is an error."""
         with self.assertRaises(ScopeError):
             run("EMPTY")
+
+    def test_a_disabled_country_is_refused(self) -> None:
+        with self.assertRaises(ScopeError) as ctx:
+            run("JP")
+        self.assertIn("not enabled", str(ctx.exception))
+
+    def test_disabled_is_not_reported_as_unknown(self) -> None:
+        """JP is a real country nobody switched on. Calling it unknown would send
+        an admin looking for a typo instead of to the Countries page."""
+        with self.assertRaises(ScopeError) as ctx:
+            run("JP")
+        self.assertNotIn("unknown", str(ctx.exception))
+        self.assertIn("Countries page", str(ctx.exception))
+
+    def test_several_disabled_countries_are_named_together(self) -> None:
+        with self.assertRaises(ScopeError) as ctx:
+            run("JP,KR")
+        message = str(ctx.exception)
+        self.assertIn("JP", message)
+        self.assertIn("KR", message)
+        self.assertIn("are not enabled", message)
+
+    def test_a_disabled_country_poisons_an_otherwise_valid_pick(self) -> None:
+        """No partial tag: if one code is refused, nothing is stored."""
+        with self.assertRaises(ScopeError):
+            run("EU,JP")
+
+    def test_an_unknown_code_is_reported_before_a_disabled_one(self) -> None:
+        """A typo is the more fundamental mistake, and enabling JP would not fix it."""
+        with self.assertRaises(ScopeError) as ctx:
+            run("JP,BOGUS")
+        self.assertIn("BOGUS", str(ctx.exception))
+        self.assertIn("unknown", str(ctx.exception))
 
     def test_equivalent_pickings_store_identically(self) -> None:
         self.assertEqual(run("EU,DACH").regions, run("DACH,EU").regions)

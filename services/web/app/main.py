@@ -32,6 +32,10 @@ SERVICE_API_KEY = os.environ.get("SERVICE_API_KEY", "")
 HTTP_TIMEOUT = float(os.environ.get("WEB_HTTP_TIMEOUT", "120"))
 
 STATIC_DIR = Path(__file__).parent / "static"
+# Outside STATIC_DIR on purpose: the static mount serves anything in there to
+# every signed-in user, readers included. The admin page is only reachable
+# through the admin-gated routes below, so for a reader it does not exist.
+ADMIN_DIR = Path(__file__).parent / "admin"
 
 # A browser holding a stale app.js keeps polling and never reacts to the 401 the
 # login gate returns, so the console looks broken instead of asking for a login.
@@ -226,19 +230,29 @@ async def api_documents(
     collection: str | None = None,
     user_id: str | None = None,
     limit: int | None = None,
+    offset: int | None = None,
+    q: str | None = None,
+    scope: str | None = None,
+    status: str | None = None,
+    sort: str | None = None,
 ) -> JSONResponse:
-    """The corpus inventory, for the admin sidebar and its status polling.
+    """The corpus inventory, for the sidebar ticker and the admin page.
 
     Admin-only because the filenames are the inventory: a reader is told which
     documents an answer came from, not everything that was ever uploaded.
+    Parameters are forwarded as given; the ingestion service validates them.
     """
-    params: dict[str, Any] = {}
-    if collection:
-        params["collection"] = collection
-    if user_id:
-        params["user_id"] = user_id
-    if limit is not None:
-        params["limit"] = limit
+    raw = {
+        "collection": collection,
+        "user_id": user_id,
+        "limit": limit,
+        "offset": offset,
+        "q": q,
+        "scope": scope,
+        "status": status,
+        "sort": sort,
+    }
+    params: dict[str, Any] = {k: v for k, v in raw.items() if v not in (None, "")}
     client: httpx.AsyncClient = request.app.state.http
     try:
         resp = await client.get(
@@ -276,6 +290,102 @@ async def api_document_delete(document_id: UUID, request: Request) -> JSONRespon
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
+
+
+async def _forward(
+    request: Request, method: str, path: str, **kwargs: Any
+) -> JSONResponse:
+    """Relay one call to the ingestion service and hand its answer back as is.
+
+    Status codes pass through untouched - a 400 for an unknown scope, a 409 for
+    a country that is still in use - because those carry the explanation the
+    admin page shows. Turning them into a generic failure here would throw that
+    away.
+    """
+    client: httpx.AsyncClient = request.app.state.http
+    try:
+        resp = await client.request(
+            method, f"{INGESTION_URL}{path}", headers=_auth_headers(), **kwargs
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
+    return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
+
+
+class RetagBody(BaseModel):
+    scope: str = Field(..., max_length=500)
+
+
+class BulkRetagBody(BaseModel):
+    document_ids: list[UUID] = Field(..., min_length=1, max_length=500)
+    scope: str = Field(..., max_length=500)
+
+
+class RegionToggleBody(BaseModel):
+    active: bool
+
+
+@app.patch("/api/documents/scope", dependencies=[Depends(require_admin)])
+async def api_retag_documents(body: BulkRetagBody, request: Request) -> JSONResponse:
+    """Retag many documents at once. All or nothing, decided upstream."""
+    return await _forward(
+        request,
+        "PATCH",
+        "/documents/scope",
+        json={"document_ids": [str(i) for i in body.document_ids], "scope": body.scope},
+    )
+
+
+@app.patch("/api/documents/{document_id}/scope", dependencies=[Depends(require_admin)])
+async def api_retag_document(
+    document_id: UUID, body: RetagBody, request: Request
+) -> JSONResponse:
+    """Change what one document applies to. Metadata only - nothing is re-parsed."""
+    return await _forward(
+        request, "PATCH", f"/documents/{document_id}/scope", json={"scope": body.scope}
+    )
+
+
+@app.post("/api/documents/backfill-fingerprints", dependencies=[Depends(require_admin)])
+async def api_backfill_fingerprints(request: Request) -> JSONResponse:
+    return await _forward(request, "POST", "/documents/backfill-fingerprints")
+
+
+@app.get("/api/regions", dependencies=[Depends(require_admin)])
+async def api_regions(request: Request) -> JSONResponse:
+    """The whole country catalogue, enabled or not, for the Countries page."""
+    return await _forward(request, "GET", "/regions")
+
+
+@app.patch("/api/regions/{code}", dependencies=[Depends(require_admin)])
+async def api_region_toggle(
+    code: str, body: RegionToggleBody, request: Request
+) -> JSONResponse:
+    if not code.isalpha() or len(code) != 2:
+        raise HTTPException(400, "a country code is two letters")
+    return await _forward(
+        request, "PATCH", f"/regions/{code.upper()}", json={"active": body.active}
+    )
+
+
+@app.get("/admin")
+async def admin_page(request: Request) -> Any:
+    """The filing page. Readers are sent back to the chat rather than shown a
+    403: a page is not an API, and for them it should simply not exist. The
+    endpoints it calls are guarded on their own regardless."""
+    if not auth.is_admin(request):
+        return RedirectResponse("/", status_code=302)
+    return FileResponse(ADMIN_DIR / "admin.html", headers=NO_CACHE)
+
+
+@app.get("/admin/admin.js")
+async def admin_script(request: Request) -> Any:
+    # 404 rather than 403 for a reader, for the same reason as the page.
+    if not auth.is_admin(request):
+        raise HTTPException(404, "not found")
+    return FileResponse(
+        ADMIN_DIR / "admin.js", media_type="text/javascript", headers=NO_CACHE
+    )
 
 
 @app.get("/api/documents/{document_id}/file")

@@ -672,7 +672,14 @@ async function pumpQueue() {
       updateQueueRowProgress(next.qid, next.uploadFrac);
     });
     if (status < 200 || status >= 300) {
-      const msg = body?.detail || body?.error || `HTTP ${status}`;
+      // A duplicate answers 409 with an object naming the document that already
+      // holds these bytes; everything else answers with a string.
+      const detail = body?.detail;
+      const msg =
+        (detail && typeof detail === "object" && detail.message) ||
+        (typeof detail === "string" && detail) ||
+        body?.error ||
+        `HTTP ${status}`;
       throw new Error(msg);
     }
     next.uploadFrac = 1;

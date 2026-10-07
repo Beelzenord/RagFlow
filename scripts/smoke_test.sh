@@ -12,11 +12,14 @@ API_KEY="${SERVICE_API_KEY:-}"
 auth=()
 if [[ -n "$API_KEY" ]]; then auth=(-H "x-api-key: $API_KEY"); fi
 
+# allow_duplicate: this script uploads the same file every run, which the
+# ingestion service would otherwise refuse with 409 from the second run on.
 echo "→ Uploading $FILE"
 DOC_ID=$(curl -fsS -X POST "$INGEST_URL/ingest" \
   "${auth[@]}" \
   -F "file=@${FILE}" \
-  -F "collection=smoke-test" | jq -r .document_id)
+  -F "collection=smoke-test" \
+  -F "allow_duplicate=true" | jq -r .document_id)
 echo "  document_id=$DOC_ID"
 
 echo "→ Polling status (up to 5 min)"

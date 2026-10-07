@@ -22,7 +22,7 @@ Client → n8n ──┬─▶ ingestion-svc (FastAPI)  → LlamaParse → chunk
 ```
 db/migrations/        SQL run on first DB init
 services/shared/      rag_shared package (settings, db, embeddings, llm, chunking)
-services/ingestion/   FastAPI: /ingest, /documents/{id}, /documents/{id}/reprocess
+services/ingestion/   FastAPI: /ingest, /documents, retag, /regions, /documents/{id}/reprocess
 services/query/       FastAPI: /query
 n8n/workflows/        Importable JSON workflows
 scripts/smoke_test.sh End-to-end test
@@ -88,13 +88,88 @@ as `unscoped`, not as a deliberate decision — see
 
 **The retrieval filter does not use any of this yet.** Tagging exists so that it
 can be done and checked before a tagging mistake can produce a wrong answer.
-Retagging never requires reprocessing: scope is metadata, not vectors.
 
-Read the vocabulary the console's picker is built from:
+### Duplicates
+
+Uploading bytes that are already in the corpus answers **409** with the document
+that holds them, instead of parsing and indexing the file a second time:
+
+```json
+{"detail": {"message": "already uploaded as faktura.pdf", "document_id": "…", "original_filename": "faktura.pdf"}}
+```
+
+Send `-F "allow_duplicate=true"` to upload it anyway — `scripts/smoke_test.sh`
+does, because it re-uploads the same file every run. The n8n ingest workflow does
+not, so a re-upload through it now gets the 409 too. Documents uploaded before
+migration 06 have no fingerprint until you run the backfill once (also a button on
+the filing page):
+
+```bash
+curl -X POST -H "x-api-key: $SERVICE_API_KEY" http://localhost:8001/documents/backfill-fingerprints
+```
+
+### Retagging
+
+Scope is metadata, not vectors, so changing it re-parses and re-embeds nothing —
+the chunk count stays as it is and no ingestion job runs:
+
+```bash
+curl -X PATCH http://localhost:8001/documents/<id>/scope \
+  -H "x-api-key: $SERVICE_API_KEY" -H "content-type: application/json" \
+  -d '{"scope": "EU,CH"}'
+
+# Several at once - all or nothing:
+curl -X PATCH http://localhost:8001/documents/scope \
+  -H "x-api-key: $SERVICE_API_KEY" -H "content-type: application/json" \
+  -d '{"document_ids": ["<id>", "<id>"], "scope": "NORDICS"}'
+```
+
+An empty scope is refused on a retag although `/ingest` accepts one: on upload it
+means a caller that does not know about scoping, but on a retag it can only be a
+blank submit. Use `GLOBAL` for everywhere.
+
+### Countries
+
+Migration 07 holds every ISO 3166-1 country (plus Kosovo, `XK`, which is
+user-assigned rather than official), with the 32 from the starter vocabulary
+enabled. Only enabled countries are offered in the pickers, and tagging a
+disabled one is refused with a message saying so. Enable a market from the
+**Countries** tab of the filing page, or:
+
+```bash
+curl -H "x-api-key: $SERVICE_API_KEY" http://localhost:8001/regions          # catalogue + usage
+curl -X PATCH http://localhost:8001/regions/JP \
+  -H "x-api-key: $SERVICE_API_KEY" -H "content-type: application/json" \
+  -d '{"active": true}'
+```
+
+Enabling is always safe. Disabling is refused with **409** while any document or
+group still uses the country — retag those documents first. Groups themselves are
+still edited by migration: changing a group's members does not update documents
+already tagged with it, so that needs its own re-expansion step before it can be a
+button. See [docs/document-scoping.md](docs/document-scoping.md).
+
+Read the vocabulary the pickers are built from (enabled countries only):
 
 ```bash
 curl -H "x-api-key: $SERVICE_API_KEY" http://localhost:8001/scopes
 ```
+
+### Listing and filtering
+
+`GET /documents` with no parameters answers as it always has — newest first, up
+to 200 — which is what the console sidebar uses. The filing page adds:
+
+| param | |
+| --- | --- |
+| `q` | filename contains |
+| `scope` | tagged with a code (`EU`, `DE`, `GLOBAL`), or `unscoped` |
+| `status` | `uploaded`, `processing`, `completed`, `degraded`, `failed` |
+| `sort` | `created_desc`, `created_asc`, `filename`, `attention` (failed, then unscoped, then degraded) |
+| `limit`, `offset` | paging; the response carries `total` |
+
+`scope` matches what a document was *tagged* with: `EU` finds documents whose
+admin picked EU, not every document that happens to cover an EU country.
 
 Poll status:
 
@@ -161,8 +236,20 @@ source-details toggle disappear, and `POST /api/upload`, `DELETE
 enforced in the BFF, not just hidden in the page. The switch is ignored when
 `AUTH_MODE=entra`, so it cannot follow you into a deployment.
 
+### The filing page
+
+Admins get **Filing** at `/admin` (linked from the Documents panel): search and
+filter the whole corpus, retag one document or a selection, delete, check older
+files for duplicates, and enable countries. It opens on *needs attention first*,
+so failed and unscoped documents are at the top.
+
+For a reader it does not exist: `/admin` redirects to the chat and its script is
+a 404. The page lives in `services/web/app/admin/`, outside `static/`, because
+the static mount serves everything in there to every signed-in user.
+
 ```bash
 cd services/web && python3 -m unittest discover -s tests -t .
+cd services/ingestion && python3 -m unittest discover -s tests -t .
 ```
 
 ## Smoke test
