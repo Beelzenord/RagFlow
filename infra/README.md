@@ -126,4 +126,4 @@ anyway, but billed at the active rate rather than the cheaper idle rate a
 
 ## What these scripts do not do
 
-They do not apply `03`/`04` (already in `02` on a fresh database), do not copy your local corpus, do not create n8n/Redis/Azure OpenAI, and do not add GitHub Actions. They do not create the Entra app registration or the access group either — that part is the portal steps above; the scripts only verify Easy Auth is on.
+They do not apply `03`/`04` (already in `02` on a fresh database); `05`–`07` (document scoping, fingerprints, the country catalogue) are applied by `migrate.sh` and are safe to re-run, so running it again upgrades an existing database. They do not copy your local corpus, do not create n8n/Redis/Azure OpenAI, and do not add GitHub Actions. They do not create the Entra app registration or the access group either — that part is the portal steps above; the scripts only verify Easy Auth is on.
