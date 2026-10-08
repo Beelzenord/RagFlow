@@ -61,12 +61,21 @@ html, body {
   background: var(--bg);
 }
 
+/* Sized by its content, so when the topbar runs out of room the controls on
+   its right wrap to a second line instead of sliding under the logo. */
 .topbar-brand {
   display: flex;
   align-items: center;
-  gap: 16px;
-  flex: 1;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  flex: 1 1 auto;
   min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .topbar .hint {
+    display: none;
+  }
 }
 
 .brand-logo {
@@ -205,54 +214,27 @@ html[data-theme="light"] .theme-label-light {
   width: 100%;
 }
 
+/* The hidden attribute has to win over the display a class sets, or a control
+   withheld from a reader would still be drawn. */
+[hidden] {
+  display: none !important;
+}
+
+/* The chat page is the conversation alone, for everyone; managing documents
+   happens on the Dashboard. */
 .grid {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.15fr);
-  grid-template-areas: "sidebar chat";
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   padding: 16px;
-  max-width: 1400px;
+  max-width: 900px;
   margin: 0 auto;
   align-items: start;
 }
 
-.sidebar {
-  grid-area: sidebar;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
-}
-
 #chat-panel {
-  grid-area: chat;
-  position: sticky;
-  top: 16px;
-  max-height: calc(100vh - 72px);
   width: 100%;
   min-width: 0;
-}
-
-/* A reader has no sidebar, so there is no second column to balance against and
-   the conversation sits in the middle of the page instead of off to one side. */
-body:not(.can-write) .grid {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "chat";
-  max-width: 900px;
-}
-
-@media (max-width: 800px) {
-  .grid {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "sidebar"
-      "chat";
-  }
-
-  #chat-panel {
-    position: static;
-    max-height: none;
-  }
 }
 
 .panel {
@@ -271,97 +253,46 @@ body:not(.can-write) .grid {
   letter-spacing: 0.05em;
 }
 
-.panel-collapsible details {
-  margin: 0;
-}
-
-.panel-collapsible details > summary {
-  list-style: none;
-}
-
-.panel-collapsible details > summary::-webkit-details-marker {
+/* Knowing what is in the corpus is an admin privilege - a reader gets the
+   conversation and nothing else. Keyed off the absence of the class rather than
+   its presence, so everything stays hidden until /api/me grants it: nothing
+   blinks into existence and back out, and an /api/me that never answers fails
+   closed. */
+body:not(.can-write) .admin-only {
   display: none;
 }
 
-.panel-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 0 0 12px 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  cursor: pointer;
-  user-select: none;
-}
-
-.panel-summary::after {
-  content: "";
-  width: 0;
-  height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-top: 6px solid var(--muted);
-  transition: transform 0.15s ease;
+/* Chat | Dashboard, built by shell.js for admins only. */
+.page-switch {
+  display: inline-flex;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  padding: 2px;
+  background: var(--panel);
   flex-shrink: 0;
 }
 
-.panel-collapsible details[open] > .panel-summary {
-  margin-bottom: 12px;
+.page-switch a {
+  padding: 5px 14px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
 }
 
-.panel-collapsible details[open] > .panel-summary::after {
-  transform: rotate(180deg);
+.page-switch a:hover {
+  color: var(--text);
 }
 
-.panel-collapsible details:not([open]) > .panel-summary {
-  margin-bottom: 0;
+.page-switch a[aria-current="page"] {
+  background: var(--accent);
+  color: var(--accent-fg);
 }
 
-/* Managing the corpus is an admin privilege, and so is knowing what is in it -
-   a reader gets the conversation and nothing else. Keyed off the absence of the
-   class rather than its presence, so everything stays hidden until /api/me
-   grants it: nothing blinks into existence and back out, and an /api/me that
-   never answers fails closed. */
-body:not(.can-write) #sidebar,
-body:not(.can-write) #upload-panel,
-body:not(.can-write) #queue-panel,
-body:not(.can-write) #docs-panel,
-/* Upload/index copy is an admin instruction; a reader sees the ask-only hint. */
-body:not(.can-write) .hint-admin,
-body.can-write .hint-reader,
-/* "3. Ask" only numbers the steps 1. Upload and 2. Documents above it. */
-body:not(.can-write) #chat-panel > h2,
-/* The Scope picker lists every filename, and the source-details toggle is an
-   admin control; without them Scope stays at its default, all documents. */
-body:not(.can-write) .chat-controls .field {
-  display: none;
-}
-
-#docs-panel {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-#docs-panel details {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-#docs-panel details[open] {
-  overflow: hidden;
-}
-
-#docs-panel details[open] #docs-list {
-  overflow-y: auto;
-  max-height: min(420px, 40vh);
+.page-switch a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .field {
@@ -395,6 +326,10 @@ body:not(.can-write) .chat-controls .field {
 .field span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.field.inline > span {
+  white-space: nowrap;
 }
 
 input[type="text"],
@@ -460,45 +395,6 @@ button:disabled {
 
 .muted { color: var(--muted); }
 
-.docs {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.doc {
-  border: 1px solid var(--panel-border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.doc-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-}
-
-.doc-name {
-  font-weight: 600;
-  word-break: break-all;
-  flex: 1;
-  min-width: 0;
-}
-
-.doc-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
 .btn-danger {
   background: transparent;
   color: var(--err);
@@ -518,14 +414,6 @@ button:disabled {
 .btn-danger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.doc-meta {
-  color: var(--muted);
-  font-size: 12px;
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
 }
 
 .badge {
@@ -912,4 +800,656 @@ button:disabled {
   color: var(--err);
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+/* ---------------------------------------------------------------------------
+   Dashboard (admin only; the page itself is served from app/admin/)
+   --------------------------------------------------------------------------- */
+
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dash {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dash > .status:empty {
+  display: none;
+}
+
+.dash > .status {
+  margin: 0;
+}
+
+.dash-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.dash-tabs a {
+  padding: 8px 14px;
+  color: var(--muted);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.dash-tabs a:hover {
+  color: var(--text);
+}
+
+.dash-tabs a[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+#view-documents,
+#view-markets {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.upload-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.upload-row input[type="text"] {
+  max-width: 260px;
+}
+
+.dash-upload .hint {
+  margin: 8px 0 0 0;
+}
+
+.dash-queue {
+  margin-top: 12px;
+}
+
+.dash-docs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.dash-docs.has-detail {
+  grid-template-columns: minmax(0, 1.2fr) minmax(340px, 1fr);
+}
+
+@media (max-width: 1100px) {
+  .dash-docs.has-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.dash-filters {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.dash-filters input[type="search"] {
+  flex: 1;
+  min-width: 180px;
+}
+
+.dash-filters .field {
+  margin: 0;
+}
+
+.dash-filters select {
+  width: auto;
+  min-width: 160px;
+}
+
+input[type="search"] {
+  background: var(--code-bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+  width: 100%;
+}
+
+.bulk-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--msg-user-bg);
+}
+
+.bulk-bar #bulk-count {
+  font-weight: 600;
+  margin-right: auto;
+}
+
+.btn-link {
+  background: none;
+  color: var(--accent);
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.doc-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.doc-table th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.doc-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--panel-border);
+  vertical-align: middle;
+}
+
+.doc-table tbody tr {
+  cursor: pointer;
+}
+
+.doc-table tbody tr:hover {
+  background: var(--msg-bot-bg);
+}
+
+.doc-table tbody tr.is-open {
+  background: var(--msg-user-bg);
+}
+
+.doc-table .col-check {
+  width: 32px;
+}
+
+.doc-table .col-name {
+  min-width: 12em;
+}
+
+.doc-table .col-name small {
+  display: block;
+}
+
+.col-date {
+  white-space: nowrap;
+}
+
+.link-btn {
+  background: none;
+  color: var(--text);
+  padding: 0;
+  font-weight: 600;
+  text-align: left;
+  /* Breaks only a filename too long for the column, never ordinary words. */
+  overflow-wrap: anywhere;
+}
+
+.link-btn:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .doc-table .col-date {
+    display: none;
+  }
+}
+
+.pager {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+/* Who it's for */
+
+.chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chip-group {
+  border-color: var(--accent);
+}
+
+.chip-more {
+  color: var(--muted);
+}
+
+.chip-global {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.chip-global::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.chip-x {
+  background: none;
+  color: var(--muted);
+  padding: 0 2px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.chip-x:hover {
+  color: var(--err);
+}
+
+.audience {
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.audience legend {
+  font-weight: 600;
+  padding: 0 4px;
+}
+
+.choice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.choice input {
+  margin-top: 3px;
+}
+
+.choice span {
+  display: flex;
+  flex-direction: column;
+}
+
+.choice small,
+.check small {
+  color: var(--muted);
+}
+
+.aud-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 24px;
+}
+
+.chips.picked:empty {
+  display: none;
+}
+
+.checklist {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.checklist:empty {
+  display: none;
+}
+
+.checklist-head {
+  margin: 8px 0 2px 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.check {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.check small {
+  margin-left: auto;
+  text-align: right;
+}
+
+.covers {
+  margin: 0;
+  font-size: 13px;
+}
+
+.covers-empty {
+  color: var(--warn);
+}
+
+/* Detail panel */
+
+.dash-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.detail-head {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.detail-head h2 {
+  margin: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+  font-size: 15px;
+  word-break: break-word;
+}
+
+.btn-icon {
+  background: none;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  padding: 0 6px;
+}
+
+.btn-icon:hover {
+  color: var(--text);
+}
+
+.facts {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.preview {
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--code-bg);
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.preview iframe {
+  width: 100%;
+  height: min(60vh, 640px);
+  border: 0;
+  background: #fff;
+}
+
+.preview img {
+  max-width: 100%;
+  max-height: min(60vh, 640px);
+  display: block;
+}
+
+.preview p {
+  margin: 16px;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.detail-actions #detail-delete {
+  margin-left: auto;
+}
+
+.btn-like {
+  display: inline-block;
+  text-decoration: none;
+  padding: 8px 14px;
+  font-size: 14px;
+}
+
+.dash-detail .status {
+  margin: 0;
+}
+
+.dash-detail .status:empty {
+  display: none;
+}
+
+/* Markets */
+
+.market-global p {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.dash-markets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .dash-markets {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.market-list,
+.group-list,
+.country-results {
+  list-style: none;
+  margin: 0 0 12px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.market-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+}
+
+.market-main {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.market-name {
+  font-weight: 600;
+}
+
+.market-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.market-why {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.add-country .field {
+  margin-bottom: 8px;
+}
+
+.country-result {
+  width: 100%;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  font-weight: 400;
+  text-align: left;
+}
+
+.country-result:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.country-result span:last-child {
+  margin-left: auto;
+  font-weight: 600;
+}
+
+.country-result:not(:disabled) span:last-child {
+  color: var(--accent);
+}
+
+.group-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+}
+
+.group-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.group-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Dialogs */
+
+dialog {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 16px;
+  width: min(520px, calc(100% - 32px));
+  max-height: calc(100vh - 32px);
+}
+
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+dialog h2 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.dialog-actions .btn-secondary {
+  padding: 8px 14px;
+  font-size: 14px;
+}
+
+.group-members {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.group-members legend {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.group-members .hint {
+  margin: 0;
+}
+
+.warn-note {
+  color: var(--warn);
+  font-size: 13px;
+  margin: 12px 0 0 0;
 }

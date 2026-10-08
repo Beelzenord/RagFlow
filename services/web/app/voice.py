@@ -280,6 +280,7 @@ async def run_turn(
     lang: str | None,
     document_id: str | None,
     history: list[dict[str, str]] | None,
+    market: str | None = None,
 ) -> AsyncIterator[bytes]:
     """Drive one spoken turn, yielding NDJSON lines.
 
@@ -328,6 +329,8 @@ async def run_turn(
         payload["lang"] = speak_lang
     if document_id:
         payload["document_id"] = document_id
+    if market:
+        payload["market"] = market
     if history:
         payload["history"] = history
 

@@ -18,6 +18,8 @@ from rag_shared.llm import LLMClient, Turn
 from rag_shared.security import require_service_key
 from rag_shared.settings import settings
 
+from .audience import market_filter
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("query")
 
@@ -146,6 +148,9 @@ class QueryRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=50)
     voice: bool | None = False
     lang: str | None = None
+    # The asker's market (ISO country code). Answers then draw on documents for
+    # everyone plus documents for that market; None searches everything.
+    market: str | None = Field(default=None, pattern=r"^[A-Z]{2}$")
     # Prior turns, oldest first, excluding the current question.
     history: list[ChatTurn] = Field(default_factory=list, max_length=12)
 
@@ -248,6 +253,10 @@ def _build_filter(req: QueryRequest) -> tuple[str, dict[str, Any]]:
     if req.user_id:
         clauses.append("d.user_id = :user_id")
         params["user_id"] = req.user_id
+    market_clause, market_params = market_filter(req.market, req.document_id)
+    if market_clause:
+        clauses.append(market_clause)
+        params.update(market_params)
     return " AND ".join(clauses), params
 
 

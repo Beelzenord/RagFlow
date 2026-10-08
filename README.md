@@ -122,23 +122,82 @@ n8n's env (set in `docker-compose.yml`).
 
 ## Who may upload and delete
 
-The console has two roles. An **admin** gets the whole console: upload, the
-documents list, per-document scoping and source details. A **reader** gets a
-centred chat and nothing else — they ask questions and download the documents an
-answer cites, but they are never shown what else the corpus holds. On Azure the
-role comes from an Entra app role in the sign-in token
-([infra/README.md](infra/README.md)); locally there is one account and it is the
-admin.
+The console has two roles. Everyone gets the same chat page. An **admin** also
+gets a **Chat | Dashboard** switch in the topbar. The Dashboard
+(`/dashboard`) is where documents are uploaded, previewed, deleted and given an
+audience, and where markets are managed. In the chat, an admin can also aim a
+question at one document ("Search in") and see source details. A **reader**
+asks questions and downloads the documents an answer cites, but is never shown
+what else the corpus holds. To a reader the Dashboard does not exist: the
+switch is not in their page, `/dashboard` sends them back to the chat, and its
+script is a 404. On Azure the role comes from an Entra app role in the sign-in
+token ([infra/README.md](infra/README.md)); locally there is one account and it
+is the admin.
 
 To see the reader console without a second account, set `DEV_FORCE_ROLE=reader`
-in `.env` and restart the web container. The sidebar, the Scope picker and the
-source-details toggle disappear, and `POST /api/upload`, `DELETE
-/api/documents/{id}` and `GET /api/documents` all answer 403 — the roles are
-enforced in the BFF, not just hidden in the page. The switch is ignored when
-`AUTH_MODE=entra`, so it cannot follow you into a deployment.
+in `.env` and restart the web container. The Dashboard switch, the Search-in
+picker and the source-details toggle disappear. `POST /api/upload`, `DELETE
+/api/documents/{id}`, `GET /api/documents` and every markets or audience write
+all answer 403: the roles are enforced in the BFF, not just hidden in the page.
+The switch is ignored when `AUTH_MODE=entra`, so it cannot follow you into a
+deployment.
 
 ```bash
 cd services/web && python3 -m unittest discover -s tests -t .
+cd services/ingestion && python3 -m unittest discover -s tests -t .
+cd services/query && python3 -m unittest discover -s tests -t .
+```
+
+## Markets: who each document is for
+
+An admin adds the countries the firm operates in (ISO 3166-1, picked by name on
+the Dashboard's **Markets** tab), and can name groups of them, for example
+*Scandinavia = Sweden, Norway, Denmark*. Each document is then either for
+**Everyone (Global)** or **only certain markets**: any mix of countries and
+groups. Global is the default, so every upload, and every document that existed
+before markets did, is for everyone until an admin says otherwise.
+
+In the chat, **Answers for** lets each person pick their market; it is
+remembered per browser and hidden while no markets exist. With a market picked,
+answers draw on Global documents plus documents for that market. **All markets**
+searches everything. Aiming a question at one document overrides the market.
+
+This steers relevance; it is **not access control**. Anyone can switch markets,
+and a reader can still download any document an answer cites.
+
+- **Groups are live.** A group is stored by reference and resolved when a
+  question is asked, so editing its countries changes every document tagged
+  with it at once. The edit dialog says how many documents that is.
+- **Nothing in use can be removed.** A country still in a group or named on a
+  document, or a group still on a document, can't be removed. The Dashboard
+  disables the button and says why, and the database's foreign keys refuse it
+  regardless (409).
+- **Changing who a document is for never re-processes it.** Only the audience
+  rows change; it applies from the next question.
+
+Ingestion API (all behind `x-api-key`; the web BFF proxies each one as
+`/api/...`, admin-only except the trimmed `GET /api/markets`):
+
+| Endpoint | Does |
+| --- | --- |
+| `GET /markets` | Countries and groups, with what uses each, plus the Global document count |
+| `GET /markets/catalogue` | Every ISO country, marked `added` or not |
+| `POST /markets/countries` `{"code": "SE"}` | Add a country (name taken from ISO) |
+| `DELETE /markets/countries/{code}` | Remove one; 409 with the reason while in use |
+| `POST /markets/groups` `{"name", "members"}` | Create a group from added countries |
+| `PUT /markets/groups/{id}` `{"name", "members"}` | Rename or change members |
+| `DELETE /markets/groups/{id}` | 409 while a document uses it |
+| `PUT /documents/{id}/audience` `{"everyone": false, "countries": ["DE"], "groups": ["<id>"]}` | Set who a document is for |
+| `PUT /documents/audience` `{"document_ids": [...], ...}` | The same for up to 500 documents, all or nothing |
+| `GET /documents?q=&who=&limit=&offset=` | `who` is `global`, a country code (directly or via a group) or a group id; returns `total` |
+
+Pass `"market": "SE"` to `POST /query` for the same filter the chat applies.
+
+The schema is `db/migrations/05-markets.sql`. Like `03` and `04`, it only runs
+by itself on a fresh Postgres volume; apply it to an existing one by hand:
+
+```bash
+docker compose exec -T postgres psql -U postgres -d postgres < db/migrations/05-markets.sql
 ```
 
 ## Smoke test
