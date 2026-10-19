@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Dashboard - Rahmqvist Assistant</title>
+  <title data-i18n="dashboard.pageTitle">Dashboard - Rahmqvist Assistant</title>
   <link rel="stylesheet" href="/styles.css" />
   <script>
     (function () {
@@ -15,13 +15,15 @@
       }
     })();
   </script>
+  <script src="/lang.js"></script>
+  <script src="/strings.js"></script>
 </head>
 <body data-page="dashboard">
   <header class="topbar">
     <div class="topbar-brand">
-      <a class="brand-logo" href="/" aria-label="Rahmqvist - back to chat"></a>
-      <h1>Dashboard</h1>
-      <span class="hint">Upload documents and decide who each one is for.</span>
+      <a class="brand-logo" href="/" aria-label="Rahmqvist - back to chat" data-i18n-aria-label="dashboard.backToChat"></a>
+      <h1 data-i18n="dashboard.title">Dashboard</h1>
+      <span class="hint" data-i18n="dashboard.hint">Upload documents and decide who each one is for.</span>
     </div>
     <button
       type="button"
@@ -35,37 +37,38 @@
         <span class="theme-toggle-thumb"></span>
       </span>
       <span class="theme-toggle-text">
-        <span class="theme-label-dark">Dark</span>
-        <span class="theme-label-light">Light</span>
+        <span class="theme-label-dark" data-i18n="common.themeDark">Dark</span>
+        <span class="theme-label-light" data-i18n="common.themeLight">Light</span>
       </span>
     </button>
     <span id="user-badge" class="user-badge" hidden></span>
-    <button type="button" id="logout-btn" class="btn-secondary" hidden>Log out</button>
+    <button type="button" id="logout-btn" class="btn-secondary" hidden data-i18n="common.logout">Log out</button>
   </header>
 
   <main class="dash">
-    <div class="dash-tabs" role="tablist" aria-label="Dashboard sections">
-      <a href="#documents" role="tab" id="tab-documents" aria-controls="view-documents">Documents</a>
-      <a href="#markets" role="tab" id="tab-markets" aria-controls="view-markets">Markets</a>
+    <div class="dash-tabs" role="tablist" aria-label="Dashboard sections" data-i18n-aria-label="dashboard.sections">
+      <a href="#documents" role="tab" id="tab-documents" aria-controls="view-documents" data-i18n="dashboard.tabDocuments">Documents</a>
+      <a href="#markets" role="tab" id="tab-markets" aria-controls="view-markets" data-i18n="dashboard.tabMarkets">Markets</a>
     </div>
     <p class="status" id="dash-status" role="status" aria-live="polite"></p>
 
     <section id="view-documents" role="tabpanel" aria-labelledby="tab-documents">
       <div class="panel dash-upload">
         <div class="upload-row">
-          <button type="button" id="upload-btn">Upload files</button>
+          <button type="button" id="upload-btn" data-i18n="dashboard.upload">Upload files</button>
           <input type="file" id="file-input" multiple hidden
                  accept=".pdf,.jpg,.jpeg,application/pdf,image/jpeg" />
           <input type="text" id="collection-input" placeholder="Collection (optional)"
-                 aria-label="Collection (optional)" />
+                 aria-label="Collection (optional)"
+                 data-i18n-placeholder="dashboard.collection" data-i18n-aria-label="dashboard.collection" />
         </div>
-        <p class="hint">
+        <p class="hint" data-i18n="dashboard.uploadHint">
           New files are for everyone (Global). Select one in the table to change who it's for.
         </p>
         <div id="queue" class="dash-queue" hidden>
           <div class="queue-summary" id="queue-summary"></div>
           <ul id="queue-list" class="queue"></ul>
-          <button type="button" id="queue-clear-btn" class="btn-secondary">Clear finished</button>
+          <button type="button" id="queue-clear-btn" class="btn-secondary" data-i18n="dashboard.clearFinished">Clear finished</button>
         </div>
       </div>
 
@@ -73,18 +76,19 @@
         <div class="panel dash-table-panel">
           <div class="dash-filters">
             <input type="search" id="doc-search" placeholder="Search by name"
-                   aria-label="Search documents by name" />
+                   aria-label="Search documents by name"
+                   data-i18n-placeholder="dashboard.searchDocs" data-i18n-aria-label="dashboard.searchDocsLabel" />
             <label class="field inline">
-              <span>Who it's for</span>
+              <span data-i18n="dashboard.whoItsFor">Who it's for</span>
               <select id="who-filter"></select>
             </label>
           </div>
 
           <div class="bulk-bar" id="bulk-bar" hidden>
             <span id="bulk-count"></span>
-            <button type="button" id="bulk-audience-btn" class="btn-secondary">Set who it's for...</button>
-            <button type="button" id="bulk-delete-btn" class="btn-danger">Delete...</button>
-            <button type="button" id="bulk-clear-btn" class="btn-link">Clear selection</button>
+            <button type="button" id="bulk-audience-btn" class="btn-secondary" data-i18n="dashboard.setWho">Set who it's for...</button>
+            <button type="button" id="bulk-delete-btn" class="btn-danger" data-i18n="dashboard.deleteSelected">Delete...</button>
+            <button type="button" id="bulk-clear-btn" class="btn-link" data-i18n="dashboard.clearSelection">Clear selection</button>
           </div>
 
           <div class="table-wrap">
@@ -92,12 +96,12 @@
               <thead>
                 <tr>
                   <th class="col-check">
-                    <input type="checkbox" id="select-all" aria-label="Select every document on this page" />
+                    <input type="checkbox" id="select-all" aria-label="Select every document on this page" data-i18n-aria-label="dashboard.selectPage" />
                   </th>
-                  <th>Name</th>
-                  <th>Who it's for</th>
-                  <th>Status</th>
-                  <th class="col-date">Uploaded</th>
+                  <th data-i18n="dashboard.colName">Name</th>
+                  <th data-i18n="dashboard.whoItsFor">Who it's for</th>
+                  <th data-i18n="dashboard.colStatus">Status</th>
+                  <th class="col-date" data-i18n="dashboard.colUploaded">Uploaded</th>
                 </tr>
               </thead>
               <tbody id="doc-rows"></tbody>
@@ -106,25 +110,25 @@
           <p class="muted" id="docs-empty" hidden></p>
 
           <div class="pager">
-            <button type="button" id="prev-page" class="btn-secondary">Previous</button>
+            <button type="button" id="prev-page" class="btn-secondary" data-i18n="dashboard.previous">Previous</button>
             <span id="page-info" class="muted"></span>
-            <button type="button" id="next-page" class="btn-secondary">Next</button>
+            <button type="button" id="next-page" class="btn-secondary" data-i18n="dashboard.next">Next</button>
           </div>
         </div>
 
         <aside class="panel dash-detail" id="detail" hidden aria-labelledby="detail-name">
           <div class="detail-head">
             <h2 id="detail-name"></h2>
-            <button type="button" id="detail-close" class="btn-icon" aria-label="Close details">&times;</button>
+            <button type="button" id="detail-close" class="btn-icon" aria-label="Close details" data-i18n-aria-label="dashboard.closeDetails">&times;</button>
           </div>
           <div class="detail-meta" id="detail-meta"></div>
           <div class="preview" id="preview"></div>
           <div id="detail-editor"></div>
           <p class="status" id="detail-status" role="status" aria-live="polite"></p>
           <div class="detail-actions">
-            <button type="button" id="detail-save">Save</button>
-            <a id="detail-download" class="btn-secondary btn-like" href="#">Download</a>
-            <button type="button" id="detail-delete" class="btn-danger">Delete</button>
+            <button type="button" id="detail-save" data-i18n="dashboard.save">Save</button>
+            <a id="detail-download" class="btn-secondary btn-like" href="#" data-i18n="dashboard.download">Download</a>
+            <button type="button" id="detail-delete" class="btn-danger" data-i18n="dashboard.delete">Delete</button>
           </div>
         </aside>
       </div>
@@ -132,37 +136,38 @@
 
     <section id="view-markets" role="tabpanel" aria-labelledby="tab-markets" hidden>
       <div class="panel market-global">
-        <h2>Global</h2>
+        <h2 data-i18n="dashboard.global">Global</h2>
         <p>
-          <span class="chip chip-global">Global</span>
-          Everyone, in every market. Documents not limited to any market.
+          <span class="chip chip-global" data-i18n="dashboard.global">Global</span>
+          <span data-i18n="dashboard.globalText">Everyone, in every market. Documents not limited to any market.</span>
           <span class="muted" id="global-count"></span>
         </p>
       </div>
 
       <div class="dash-markets">
         <div class="panel">
-          <h2>Countries</h2>
+          <h2 data-i18n="dashboard.countriesHeading">Countries</h2>
           <p class="muted" id="countries-summary"></p>
           <ul id="country-list" class="market-list"></ul>
           <div class="add-country">
             <label class="field">
-              <span>Add a country</span>
+              <span data-i18n="dashboard.addCountry">Add a country</span>
               <input type="search" id="country-search" autocomplete="off"
-                     placeholder="Type a country name or code, e.g. Sweden or SE" />
+                     placeholder="Type a country name or code, e.g. Sweden or SE"
+                     data-i18n-placeholder="dashboard.addCountryPlaceholder" />
             </label>
             <ul id="country-results" class="country-results"></ul>
           </div>
         </div>
 
         <div class="panel">
-          <h2>Groups</h2>
-          <p class="muted">
+          <h2 data-i18n="dashboard.groupsHeading">Groups</h2>
+          <p class="muted" data-i18n="dashboard.groupsIntro">
             Give a set of countries a name, like Scandinavia. A document for a group
             follows any later change to it.
           </p>
           <ul id="group-list" class="group-list"></ul>
-          <button type="button" id="new-group-btn">New group</button>
+          <button type="button" id="new-group-btn" data-i18n="dashboard.newGroup">New group</button>
         </div>
       </div>
     </section>
@@ -173,28 +178,29 @@
     <div id="dialog-editor"></div>
     <p class="status" id="audience-dialog-status" role="status" aria-live="polite"></p>
     <div class="dialog-actions">
-      <button type="button" class="btn-secondary" id="audience-dialog-cancel">Cancel</button>
-      <button type="button" id="audience-dialog-save">Save</button>
+      <button type="button" class="btn-secondary" id="audience-dialog-cancel" data-i18n="dashboard.cancel">Cancel</button>
+      <button type="button" id="audience-dialog-save" data-i18n="dashboard.save">Save</button>
     </div>
   </dialog>
 
   <dialog id="group-dialog" aria-labelledby="group-dialog-title">
     <h2 id="group-dialog-title"></h2>
     <label class="field">
-      <span>Name</span>
-      <input type="text" id="group-name" maxlength="60" placeholder="e.g. Scandinavia" />
+      <span data-i18n="dashboard.groupName">Name</span>
+      <input type="text" id="group-name" maxlength="60" placeholder="e.g. Scandinavia"
+             data-i18n-placeholder="dashboard.groupNamePlaceholder" />
     </label>
     <fieldset class="group-members">
-      <legend>Countries in this group</legend>
-      <input type="search" id="group-filter" placeholder="Filter countries" aria-label="Filter countries" />
+      <legend data-i18n="dashboard.groupMembers">Countries in this group</legend>
+      <input type="search" id="group-filter" placeholder="Filter countries" aria-label="Filter countries" data-i18n-placeholder="dashboard.filterCountries" data-i18n-aria-label="dashboard.filterCountries" />
       <div class="checklist" id="group-checklist"></div>
-      <p class="hint">Missing a country? Add it under Countries first.</p>
+      <p class="hint" data-i18n="dashboard.missingCountry">Missing a country? Add it under Countries first.</p>
     </fieldset>
     <p class="warn-note" id="group-warning" hidden></p>
     <p class="status" id="group-dialog-status" role="status" aria-live="polite"></p>
     <div class="dialog-actions">
-      <button type="button" class="btn-secondary" id="group-dialog-cancel">Cancel</button>
-      <button type="button" id="group-dialog-save">Save</button>
+      <button type="button" class="btn-secondary" id="group-dialog-cancel" data-i18n="dashboard.cancel">Cancel</button>
+      <button type="button" id="group-dialog-save" data-i18n="dashboard.save">Save</button>
     </div>
   </dialog>
 

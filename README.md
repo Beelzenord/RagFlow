@@ -200,6 +200,36 @@ by itself on a fresh Postgres volume; apply it to an existing one by hand:
 docker compose exec -T postgres psql -U postgres -d postgres < db/migrations/05-markets.sql
 ```
 
+## Languages
+
+The interface speaks **English, Swedish, Norwegian (Bokmål), Finnish and
+Danish**. Each person gets, in order:
+
+1. the language they picked in the topbar (remembered per browser);
+2. otherwise the first of their browser's languages that is supported;
+3. otherwise English.
+
+No Azure or Entra settings are involved. Switching takes effect at once,
+without a reload, so a conversation on screen is kept.
+
+- **The words** live in `services/web/app/locales/{en,sv,nb,fi,da}.json`.
+  `en.json` is the full set of keys. Plurals are `{"one": …, "other": …}`, and
+  placeholders look like `{name}`.
+- **To add or change text**, edit every file. `tests/test_i18n.py` fails on a
+  missing key, a mismatched placeholder, or a key a page or script uses that
+  isn't in `en.json`.
+- **Country names and dates** aren't in the dictionaries. The browser supplies
+  them in the right language (`Intl`), so "Sverige", "Ruotsi" and "Tyskland"
+  cost nothing.
+- **Answers** follow the language of the question, as before; the interface
+  language doesn't change them.
+- **Voice** follows the interface language unless an admin picks another in
+  its own dropdown. Norwegian, Finnish and Danish use the default ElevenLabs
+  voice unless `ELEVENLABS_VOICE_ID_NB`, `_FI` or `_DA` is set.
+- **What readers are sent:** `GET /strings.js` (`static/lang.js` is the engine)
+  serves the dictionaries. A reader's copy leaves out the Dashboard's wording,
+  so the Dashboard still doesn't exist from where they sit.
+
 ## Smoke test
 
 ```bash

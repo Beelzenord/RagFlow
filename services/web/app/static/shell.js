@@ -1,8 +1,8 @@
-// The topbar both pages share: theme, who is signed in, signing out, and - for
-// admins only - the switch between Chat and the Dashboard.
+// The topbar both pages share: theme, language, who is signed in, signing out,
+// and - for admins only - the switch between Chat and the Dashboard.
 //
 // Loaded before the page's own script, which waits on Shell.session for the
-// /api/me answer instead of asking again.
+// /api/me answer instead of asking again. Needs static/lang.js (in <head>).
 
 (function () {
   const THEME_KEY = "rag.theme.v1";
@@ -36,7 +36,7 @@
     if (toggle) {
       const light = t === "light";
       toggle.setAttribute("aria-checked", light ? "true" : "false");
-      toggle.setAttribute("aria-label", light ? "Use dark mode" : "Use light mode");
+      toggle.setAttribute("aria-label", Lang.t(light ? "common.useDark" : "common.useLight"));
     }
   }
 
@@ -64,19 +64,43 @@
     const nav = document.createElement("nav");
     nav.id = "page-switch";
     nav.className = "page-switch";
-    nav.setAttribute("aria-label", "Switch page");
-    for (const [page, href, label] of [
-      ["chat", "/", "Chat"],
-      ["dashboard", "/dashboard", "Dashboard"],
+    nav.setAttribute("data-i18n-aria-label", "nav.label");
+    nav.setAttribute("aria-label", Lang.t("nav.label"));
+    for (const [page, href, key] of [
+      ["chat", "/", "nav.chat"],
+      ["dashboard", "/dashboard", "nav.dashboard"],
     ]) {
       const a = document.createElement("a");
       a.href = href;
-      a.textContent = label;
+      // Marked like the static text, so a language switch relabels it too.
+      a.dataset.i18n = key;
+      a.textContent = Lang.t(key);
       if (page === current) a.setAttribute("aria-current", "page");
       nav.appendChild(a);
     }
-    const toggle = document.getElementById("theme-toggle");
-    topbar.insertBefore(nav, toggle || null);
+    const anchor = document.getElementById("lang-select") || document.getElementById("theme-toggle");
+    topbar.insertBefore(nav, anchor || null);
+  }
+
+  // Everyone gets this, signed in or not; each language is named in itself.
+  function addLanguagePicker() {
+    const topbar = document.querySelector(".topbar");
+    if (!topbar || document.getElementById("lang-select")) return;
+    const select = document.createElement("select");
+    select.id = "lang-select";
+    select.className = "lang-select";
+    select.setAttribute("data-i18n-aria-label", "common.language");
+    select.setAttribute("aria-label", Lang.t("common.language"));
+    for (const code of Lang.supported) {
+      const opt = document.createElement("option");
+      opt.value = code;
+      opt.lang = code;
+      opt.textContent = Lang.names[code];
+      select.appendChild(opt);
+    }
+    select.value = Lang.current;
+    select.addEventListener("change", () => Lang.set(select.value));
+    topbar.insertBefore(select, document.getElementById("theme-toggle") || null);
   }
 
   // The topbar cannot work out who is signed in on its own: with Microsoft
@@ -124,6 +148,10 @@
   }
 
   initTheme();
+  addLanguagePicker();
+  // The theme toggle's label depends on the theme, so it is set here rather
+  // than marked for Lang.apply().
+  document.addEventListener("langchange", () => applyTheme(getTheme()));
   window.Shell = {
     bounceIfLoggedOut,
     session: loadSession(),

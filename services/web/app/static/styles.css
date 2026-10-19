@@ -78,6 +78,13 @@ html, body {
   }
 }
 
+/* On a phone the switch alone says enough; its aria-label still names it. */
+@media (max-width: 480px) {
+  .theme-toggle-text {
+    display: none;
+  }
+}
+
 .brand-logo {
   display: block;
   flex-shrink: 0;
@@ -260,6 +267,23 @@ html[data-theme="light"] .theme-label-light {
    closed. */
 body:not(.can-write) .admin-only {
   display: none;
+}
+
+/* Set by lang.js for a language other than English, and lifted as soon as the
+   page is translated, so nobody sees the English in the HTML first. */
+html.i18n-pending body {
+  visibility: hidden;
+}
+
+.lang-select {
+  width: auto;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+  cursor: pointer;
 }
 
 /* Chat | Dashboard, built by shell.js for admins only. */

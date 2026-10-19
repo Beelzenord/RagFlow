@@ -6,6 +6,7 @@ ship to the browser.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -16,7 +17,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -442,6 +443,59 @@ async def dashboard_script(request: Request) -> Any:
     if not auth.is_admin(request):
         raise HTTPException(404, "Not Found")
     return FileResponse(ADMIN_DIR / "dashboard.js", media_type="text/javascript", headers=NO_CACHE)
+
+
+# --- Interface languages ----------------------------------------------------------
+# One dictionary per language in app/locales; en.json is the full set of keys.
+# Every language travels in one script, because the choice is made in the
+# browser (static/lang.js) and switching must not need another request.
+
+LOCALES_DIR = Path(__file__).parent / "locales"
+LANGUAGES = ("en", "sv", "nb", "fi", "da")
+# Wording that would tell a reader the Dashboard exists: its page switch and
+# everything on it. Only admins are sent these.
+ADMIN_KEY_PREFIXES = ("nav.", "dashboard.")
+
+
+def _load_locales() -> dict[str, dict[str, Any]]:
+    locales = {
+        lang: json.loads((LOCALES_DIR / f"{lang}.json").read_text(encoding="utf-8")) for lang in LANGUAGES
+    }
+    # A missing entry falls back to English in the browser, so it is a warning
+    # here; tests/test_i18n.py is what keeps the dictionaries complete.
+    for lang, entries in locales.items():
+        missing = sorted(set(locales["en"]) - set(entries))
+        if missing:
+            log.warning("locale %s lacks %d keys, e.g. %s", lang, len(missing), missing[:3])
+    return locales
+
+
+def _strings_script(locales: dict[str, dict[str, Any]], admin: bool) -> tuple[bytes, str]:
+    payload = {
+        lang: {k: v for k, v in entries.items() if admin or not k.startswith(ADMIN_KEY_PREFIXES)}
+        for lang, entries in locales.items()
+    }
+    body = ("Lang.add(" + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + ");\n").encode()
+    return body, '"' + hashlib.sha256(body).hexdigest()[:20] + '"'
+
+
+_LOCALES = _load_locales()
+_STRINGS = {admin: _strings_script(_LOCALES, admin) for admin in (False, True)}
+
+
+@app.get("/strings.js")
+async def strings_script(request: Request) -> Response:
+    """The dictionaries for static/lang.js.
+
+    Public, so the sign-in page can be translated too - nothing in it describes
+    the corpus. A reader's copy leaves out the Dashboard's wording; the two
+    copies have different ETags, so a role change is never answered from cache.
+    """
+    body, etag = _STRINGS[auth.is_admin(request)]
+    headers = {"etag": etag, "cache-control": "no-cache"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(body, media_type="text/javascript", headers=headers)
 
 
 MARKET_PATTERN = r"^[A-Z]{2}$"

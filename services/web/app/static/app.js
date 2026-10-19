@@ -18,6 +18,10 @@ const AUDIO_LEAD_SECONDS = 0.06;
 
 const state = {
   turns: [],
+  // What the two pickers were last filled from, so a language switch can
+  // relabel them without asking the server again.
+  marketCountries: [],
+  pickerDocs: [],
   // Set from /api/me. Starts false so a reader is never briefly offered a
   // control the server would refuse; the server checks again regardless.
   canWrite: false,
@@ -91,23 +95,27 @@ async function loadDocumentPicker() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     const docs = Array.isArray(data?.documents) ? data.documents : [];
-    const current = els.scopeSelect.value;
-    const all = document.createElement("option");
-    all.value = "";
-    all.textContent = "All documents";
-    const options = [all];
-    for (const d of docs) {
-      if (!isIndexed(d.status)) continue;
-      const opt = document.createElement("option");
-      opt.value = d.id;
-      opt.textContent = d.original_filename || d.id;
-      options.push(opt);
-    }
-    els.scopeSelect.replaceChildren(...options);
-    if (options.some((o) => o.value === current)) els.scopeSelect.value = current;
+    state.pickerDocs = docs.filter((d) => isIndexed(d.status));
+    renderDocumentPicker();
   } catch (err) {
     console.warn("document list failed", err);
   }
+}
+
+function renderDocumentPicker() {
+  const current = els.scopeSelect.value;
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = Lang.t("chat.allDocuments");
+  const options = [all];
+  for (const d of state.pickerDocs) {
+    const opt = document.createElement("option");
+    opt.value = d.id;
+    opt.textContent = d.original_filename || d.id;
+    options.push(opt);
+  }
+  els.scopeSelect.replaceChildren(...options);
+  if (options.some((o) => o.value === current)) els.scopeSelect.value = current;
 }
 
 // "Answers for": the asker's market. Answers then draw on documents for
@@ -142,6 +150,12 @@ async function loadMarketPicker() {
   } catch (err) {
     console.warn("market list failed", err);
   }
+  state.marketCountries = countries;
+  renderMarketPicker();
+}
+
+function renderMarketPicker() {
+  const countries = state.marketCountries;
   // With no markets every document is for everyone, so there is nothing to pick.
   if (!countries.length) {
     els.marketField.hidden = true;
@@ -150,17 +164,22 @@ async function loadMarketPicker() {
   }
   const all = document.createElement("option");
   all.value = "";
-  all.textContent = "All markets";
+  all.textContent = Lang.t("chat.allMarkets");
+  // Country names in the reader's language ("Sverige", "Ruotsi"), sorted by
+  // that language's rules.
+  const named = countries
+    .map((c) => ({ code: c.code, name: Lang.region(c.code, c.name) }))
+    .sort((a, b) => Lang.compare(a.name, b.name));
   const options = [all];
-  for (const c of countries) {
+  for (const c of named) {
     const opt = document.createElement("option");
     opt.value = c.code;
     opt.textContent = c.name;
     options.push(opt);
   }
+  const current = els.marketSelect.value || loadSavedMarket();
   els.marketSelect.replaceChildren(...options);
-  const saved = loadSavedMarket();
-  els.marketSelect.value = countries.some((c) => c.code === saved) ? saved : "";
+  els.marketSelect.value = countries.some((c) => c.code === current) ? current : "";
   els.marketField.hidden = false;
 }
 
@@ -227,6 +246,15 @@ async function initSession() {
 
 initSession();
 
+// Static text is relabelled by Lang.apply(); this is what the page built itself.
+// Messages already in the conversation keep the words they were written in.
+document.addEventListener("langchange", () => {
+  renderMarketPicker();
+  if (state.canWrite) renderDocumentPicker();
+  updateSendBtn();
+  followUiLanguageForVoice();
+});
+
 async function readNdjson(resp, onEvent) {
   /** Feed one parsed object per line to onEvent, in arrival order. */
   const reader = resp.body.getReader();
@@ -268,7 +296,7 @@ async function runChat(question) {
   answerNode.className = "answer";
   const spinner = document.createElement("span");
   spinner.className = "spinner";
-  spinner.setAttribute("aria-label", "thinking");
+  spinner.setAttribute("aria-label", Lang.t("chat.thinking"));
   answerNode.appendChild(spinner);
   bubble.appendChild(answerNode);
   let firstDeltaSeen = false;
@@ -293,10 +321,10 @@ async function runChat(question) {
       els.chatLog.scrollTop = els.chatLog.scrollHeight;
     } else if (evt.type === "error") {
       bubble.classList.add("error");
-      answerNode.textContent = `Query failed: ${evt.message || "unknown error"}`;
+      answerNode.textContent = Lang.t("chat.failed", { message: evt.message || Lang.t("chat.unknownError") });
     } else if (evt.type === "done") {
       if (!firstDeltaSeen) {
-        answerNode.textContent = "(empty answer)";
+        answerNode.textContent = Lang.t("chat.empty");
       } else {
         // Models sometimes still emit [1]/ strip leftover markers from the final text.
         answerNode.textContent = stripInlineCitations(answerNode.textContent);
@@ -333,11 +361,11 @@ async function runChat(question) {
         answerNode.textContent = stripInlineCitations(answerNode.textContent);
         answered = true;
       } else {
-        answerNode.textContent = "(stopped)";
+        answerNode.textContent = Lang.t("chat.stopped");
       }
     } else {
       bubble.classList.add("error");
-      answerNode.textContent = `Query failed: ${err.message}`;
+      answerNode.textContent = Lang.t("chat.failed", { message: err.message });
     }
   } finally {
     state.streaming = false;
@@ -426,7 +454,7 @@ function updateSendBtn() {
   const busy = state.streaming;
   els.chatForm.classList.toggle("is-streaming", busy);
   els.askBtn.disabled = !busy && !els.questionInput.value.trim();
-  els.askBtn.setAttribute("aria-label", busy ? "Stop generating" : "Send");
+  els.askBtn.setAttribute("aria-label", Lang.t(busy ? "chat.stop" : "chat.send"));
   updateMicBtn();
 }
 
@@ -453,7 +481,7 @@ function renderRewrite(text) {
   /** Shows how a follow-up was interpreted; hidden with source details. */
   const div = document.createElement("div");
   div.className = "rewrite";
-  div.textContent = `Searched for: ${text}`;
+  div.textContent = Lang.t("chat.searchedFor", { text });
   return div;
 }
 
@@ -464,7 +492,7 @@ function renderSourceDocs(list) {
 
   const label = document.createElement("div");
   label.className = "source-docs-label";
-  label.textContent = "Documents";
+  label.textContent = Lang.t("chat.sources");
   wrap.appendChild(label);
 
   const links = document.createElement("div");
@@ -474,12 +502,12 @@ function renderSourceDocs(list) {
   for (const c of list) {
     if (!c.document_id || seen.has(c.document_id)) continue;
     seen.add(c.document_id);
-    const name = c.filename || "document";
+    const name = c.filename || Lang.t("chat.untitled");
     const a = document.createElement("a");
     a.className = "source-doc-link";
     a.href = `/api/documents/${encodeURIComponent(c.document_id)}/file`;
     a.download = name;
-    a.title = `Download ${name}`;
+    a.title = Lang.t("chat.download", { name });
     a.textContent = name;
     links.appendChild(a);
   }
@@ -495,16 +523,18 @@ function renderCitations(list) {
   cites.className = "citations";
   for (const c of list) {
     const line = document.createElement("div");
-    const loc = [c.filename, c.page_number ? `p.${c.page_number}` : null, c.heading]
+    const loc = [c.filename, c.page_number ? Lang.t("chat.page", { n: c.page_number }) : null, c.heading]
       .filter(Boolean)
       .join(" - ");
     // "vector", "keyword" or "both" - which retriever found this chunk. The
     // score is always vector similarity, so a keyword-only hit can score low
     // and still be the right answer; showing both together explains that.
-    const found = { dense: "vector", lexical: "keyword", both: "both" }[c.retrieval];
+    const found = { dense: "chat.foundVector", lexical: "chat.foundKeyword", both: "chat.foundBoth" }[
+      c.retrieval
+    ];
     const detail = [
-      typeof c.score === "number" ? `score ${c.score.toFixed(2)}` : null,
-      found ? `found by ${found}` : null,
+      typeof c.score === "number" ? Lang.t("chat.score", { score: c.score.toFixed(2) }) : null,
+      found ? Lang.t("chat.foundBy", { how: Lang.t(found) }) : null,
     ].filter(Boolean);
     line.textContent = `[${c.n}] ${loc}${detail.length ? ` (${detail.join(", ")})` : ""}`;
     cites.appendChild(line);
@@ -530,12 +560,9 @@ function initVoice() {
   }
   els.voiceControls.hidden = false;
 
-  try {
-    const saved = localStorage.getItem(VOICE_LANG_KEY);
-    if (saved && els.voiceLang) els.voiceLang.value = saved;
-  } catch {
-    /* ignore */
-  }
+  // A voice language picked here sticks; until then it follows the interface.
+  const saved = savedVoiceLanguage();
+  if (els.voiceLang) els.voiceLang.value = saved || Lang.current;
   els.voiceLang?.addEventListener("change", () => {
     try {
       localStorage.setItem(VOICE_LANG_KEY, els.voiceLang.value);
@@ -551,6 +578,21 @@ function initVoice() {
   });
 }
 
+function savedVoiceLanguage() {
+  try {
+    const saved = localStorage.getItem(VOICE_LANG_KEY);
+    return saved && [...(els.voiceLang?.options || [])].some((o) => o.value === saved) ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function followUiLanguageForVoice() {
+  if (els.voiceLang && !savedVoiceLanguage()) els.voiceLang.value = Lang.current;
+  updateMicBtn();
+  setVoiceStatus("");
+}
+
 function setVoiceStatus(text) {
   if (els.voiceStatus) els.voiceStatus.textContent = text || "";
 }
@@ -560,7 +602,7 @@ function updateMicBtn() {
   els.micBtn.classList.toggle("is-recording", voice.recording);
   els.micBtn.setAttribute(
     "aria-label",
-    voice.recording ? "Stop recording" : voice.streaming ? "Stop speaking" : "Ask by voice",
+    Lang.t(voice.recording ? "voice.stopRecording" : voice.streaming ? "voice.stopSpeaking" : "voice.ask"),
   );
   // The written composer stays usable, but two answers streaming into the same
   // log at once would interleave.
@@ -582,7 +624,7 @@ async function startRecording() {
       audio: { echoCancellation: true, noiseSuppression: true },
     });
   } catch (err) {
-    setVoiceStatus(err.name === "NotAllowedError" ? "Microphone blocked" : "No microphone");
+    setVoiceStatus(Lang.t(err.name === "NotAllowedError" ? "voice.blocked" : "voice.noMic"));
     return;
   }
 
@@ -596,7 +638,7 @@ async function startRecording() {
     voice.recorder = new MediaRecorder(voice.micStream, mime ? { mimeType: mime } : undefined);
   } catch {
     releaseMic();
-    setVoiceStatus("Recording unsupported here");
+    setVoiceStatus(Lang.t("voice.unsupported"));
     return;
   }
 
@@ -614,14 +656,14 @@ async function startRecording() {
     voice.recording = false;
     updateMicBtn();
     if (shouldSendRecording(blob, durationMs, peakRms)) sendVoiceTurn(blob);
-    else setVoiceStatus(blob.size > 0 ? "I didn't hear anything - try again?" : "");
+    else setVoiceStatus(blob.size > 0 ? Lang.t("voice.notHeard") : "");
   });
 
   voice.meter = startMicMeter(voice.micStream);
   voice.recorder.start();
   voice.startedAt = Date.now();
   voice.recording = true;
-  setVoiceStatus("Listening - click to send");
+  setVoiceStatus(Lang.t("voice.listening"));
   updateMicBtn();
 }
 
@@ -798,7 +840,7 @@ async function sendVoiceTurn(blob) {
   stopPlayback();
   voice.streaming = true;
   voice.abort = new AbortController();
-  setVoiceStatus("Thinking...");
+  setVoiceStatus(Lang.t("voice.thinking"));
   updateMicBtn();
 
   const form = new FormData();
@@ -823,7 +865,7 @@ async function sendVoiceTurn(blob) {
     answerNode.className = "answer";
     const spinner = document.createElement("span");
     spinner.className = "spinner";
-    spinner.setAttribute("aria-label", "thinking");
+    spinner.setAttribute("aria-label", Lang.t("chat.thinking"));
     answerNode.appendChild(spinner);
     bubble.appendChild(answerNode);
   };
@@ -834,7 +876,7 @@ async function sendVoiceTurn(blob) {
       question = evt.text || "";
       appendMessage("user", question);
       ensureBubble();
-      setVoiceStatus("Answering...");
+      setVoiceStatus(Lang.t("voice.answering"));
     } else if (evt.type === "rewrite") {
       ensureBubble();
       if (evt.text) bubble.appendChild(renderRewrite(evt.text));
@@ -857,14 +899,17 @@ async function sendVoiceTurn(blob) {
     } else if (evt.type === "error") {
       // A failure that arrives mid-stream is shown as itself. The endpoint
       // answers NDJSON precisely so this cannot become an empty success.
-      failure = evt.message || "unknown error";
+      // "no_speech" is the one refusal a person is meant to read and act on,
+      // so it is worded here rather than shown in the server's English.
+      failure =
+        evt.code === "no_speech" ? Lang.t("voice.noSpeech") : evt.message || Lang.t("chat.unknownError");
       ensureBubble();
       bubble.classList.add("error");
-      answerNode.textContent = `Voice failed: ${failure}`;
+      answerNode.textContent = Lang.t("voice.failed", { message: failure });
     } else if (evt.type === "done") {
       ensureBubble();
       if (!firstDeltaSeen) {
-        answerNode.textContent = "(empty answer)";
+        answerNode.textContent = Lang.t("chat.empty");
       } else {
         answerNode.textContent = stripInlineCitations(answerNode.textContent);
         answered = true;
@@ -890,13 +935,13 @@ async function sendVoiceTurn(blob) {
         answerNode.textContent = stripInlineCitations(answerNode.textContent);
         answered = true;
       } else if (answerNode) {
-        answerNode.textContent = "(stopped)";
+        answerNode.textContent = Lang.t("chat.stopped");
       }
     } else {
       failure = err.message;
       ensureBubble();
       bubble.classList.add("error");
-      answerNode.textContent = `Voice failed: ${err.message}`;
+      answerNode.textContent = Lang.t("voice.failed", { message: err.message });
     }
   } finally {
     voice.streaming = false;

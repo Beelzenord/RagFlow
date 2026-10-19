@@ -159,6 +159,9 @@ class QueryRequest(BaseModel):
 LANG_NAMES: dict[str, str] = {
     "en": "English",
     "sv": "Swedish",
+    "nb": "Norwegian (Bokmål)",
+    "fi": "Finnish",
+    "da": "Danish",
 }
 
 
