@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title data-i18n="dashboard.pageTitle">Dashboard - Rahmqvist Assistant</title>
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/dashboard/dashboard.css" />
   <script>
     (function () {
       try {
@@ -45,134 +46,161 @@
     <button type="button" id="logout-btn" class="btn-secondary" hidden data-i18n="common.logout">Log out</button>
   </header>
 
-  <main class="dash">
-    <div class="dash-tabs" role="tablist" aria-label="Dashboard sections" data-i18n-aria-label="dashboard.sections">
-      <a href="#documents" role="tab" id="tab-documents" aria-controls="view-documents" data-i18n="dashboard.tabDocuments">Documents</a>
-      <a href="#markets" role="tab" id="tab-markets" aria-controls="view-markets" data-i18n="dashboard.tabMarkets">Markets</a>
-    </div>
-    <p class="status" id="dash-status" role="status" aria-live="polite"></p>
+  <div class="lib">
+    <!-- The markets, as folders: picking one shows its documents; dropping
+         documents on one makes them for it. -->
+    <nav class="lib-rail" id="rail" aria-label="Library" data-i18n-aria-label="dashboard.library">
+      <div class="rail-head">
+        <span class="rail-title" data-i18n="dashboard.library">Library</span>
+        <button type="button" class="btn-icon rail-close" id="rail-close" aria-label="Close the library" data-i18n-aria-label="dashboard.closeLibrary"></button>
+      </div>
+      <ul class="rail-list" id="rail-top"></ul>
+      <section class="rail-section" aria-labelledby="rail-groups-title">
+        <div class="rail-section-head">
+          <h2 id="rail-groups-title" data-i18n="dashboard.groupsHeading">Groups</h2>
+          <button type="button" class="rail-add" id="new-group-btn" aria-label="New group" data-i18n-aria-label="dashboard.newGroup" title="New group" data-i18n-title="dashboard.newGroup"></button>
+        </div>
+        <ul class="rail-list" id="rail-groups"></ul>
+      </section>
+      <section class="rail-section" aria-labelledby="rail-countries-title">
+        <div class="rail-section-head">
+          <h2 id="rail-countries-title" data-i18n="dashboard.countriesHeading">Countries</h2>
+          <button type="button" class="rail-add" id="add-country-btn" aria-label="Add a country" data-i18n-aria-label="dashboard.addCountry" title="Add a country" data-i18n-title="dashboard.addCountry"></button>
+        </div>
+        <ul class="rail-list" id="rail-countries"></ul>
+      </section>
+      <p class="rail-tip" data-i18n="dashboard.dragHint">Tip: drag documents onto a market to make them for it.</p>
+    </nav>
+    <div class="rail-scrim" id="rail-scrim" hidden></div>
 
-    <section id="view-documents" role="tabpanel" aria-labelledby="tab-documents">
-      <div class="panel dash-upload">
-        <div class="upload-row">
-          <button type="button" id="upload-btn" data-i18n="dashboard.upload">Upload files</button>
+    <main class="lib-main" id="lib-main">
+      <header class="view-head">
+        <button type="button" class="rail-open" id="rail-open" aria-controls="rail" aria-expanded="false"></button>
+        <div class="view-title">
+          <span class="view-icon" id="view-icon" aria-hidden="true"></span>
+          <h2 id="view-name"></h2>
+          <span class="view-code" id="view-code"></span>
+          <span class="view-count" id="view-count"></span>
+        </div>
+        <div class="view-actions" id="view-actions"></div>
+        <div class="view-sub" id="view-sub"></div>
+      </header>
+
+      <div class="toolbar">
+        <label class="search-box">
+          <span class="search-icon" id="search-icon" aria-hidden="true"></span>
+          <input type="search" id="doc-search" placeholder="Search by name"
+                 aria-label="Search documents by name" aria-keyshortcuts="/"
+                 data-i18n-placeholder="dashboard.searchDocs" data-i18n-aria-label="dashboard.searchDocsLabel" />
+          <kbd class="search-kbd" aria-hidden="true">/</kbd>
+        </label>
+        <div class="upload-split">
+          <button type="button" id="upload-btn" class="btn-upload">
+            <span class="btn-upload-icon" id="upload-icon" aria-hidden="true"></span>
+            <span data-i18n="dashboard.upload">Upload files</span>
+          </button>
+          <button type="button" id="upload-options-btn" class="btn-upload btn-upload-caret"
+                  aria-label="Upload options" data-i18n-aria-label="dashboard.uploadOptions"
+                  aria-haspopup="true" aria-expanded="false" aria-controls="upload-options"></button>
+          <div class="popover upload-options" id="upload-options" hidden>
+            <label class="field">
+              <span data-i18n="dashboard.collection">Collection (optional)</span>
+              <input type="text" id="collection-input" autocomplete="off" />
+            </label>
+            <p class="hint" data-i18n="dashboard.uploadHint">
+              New files are for everyone (Global). Select one in the table to change who it's for.
+            </p>
+          </div>
           <input type="file" id="file-input" multiple hidden
                  accept=".pdf,.jpg,.jpeg,application/pdf,image/jpeg" />
-          <input type="text" id="collection-input" placeholder="Collection (optional)"
-                 aria-label="Collection (optional)"
-                 data-i18n-placeholder="dashboard.collection" data-i18n-aria-label="dashboard.collection" />
-        </div>
-        <p class="hint" data-i18n="dashboard.uploadHint">
-          New files are for everyone (Global). Select one in the table to change who it's for.
-        </p>
-        <div id="queue" class="dash-queue" hidden>
-          <div class="queue-summary" id="queue-summary"></div>
-          <ul id="queue-list" class="queue"></ul>
-          <button type="button" id="queue-clear-btn" class="btn-secondary" data-i18n="dashboard.clearFinished">Clear finished</button>
         </div>
       </div>
 
-      <div class="dash-docs" id="dash-docs">
-        <div class="panel dash-table-panel">
-          <div class="dash-filters">
-            <input type="search" id="doc-search" placeholder="Search by name"
-                   aria-label="Search documents by name"
-                   data-i18n-placeholder="dashboard.searchDocs" data-i18n-aria-label="dashboard.searchDocsLabel" />
-            <label class="field inline">
-              <span data-i18n="dashboard.whoItsFor">Who it's for</span>
-              <select id="who-filter"></select>
-            </label>
-          </div>
-
-          <div class="bulk-bar" id="bulk-bar" hidden>
-            <span id="bulk-count"></span>
-            <button type="button" id="bulk-audience-btn" class="btn-secondary" data-i18n="dashboard.setWho">Set who it's for...</button>
-            <button type="button" id="bulk-delete-btn" class="btn-danger" data-i18n="dashboard.deleteSelected">Delete...</button>
-            <button type="button" id="bulk-clear-btn" class="btn-link" data-i18n="dashboard.clearSelection">Clear selection</button>
-          </div>
-
-          <div class="table-wrap">
-            <table class="doc-table">
-              <thead>
-                <tr>
-                  <th class="col-check">
-                    <input type="checkbox" id="select-all" aria-label="Select every document on this page" data-i18n-aria-label="dashboard.selectPage" />
-                  </th>
-                  <th data-i18n="dashboard.colName">Name</th>
-                  <th data-i18n="dashboard.whoItsFor">Who it's for</th>
-                  <th data-i18n="dashboard.colStatus">Status</th>
-                  <th class="col-date" data-i18n="dashboard.colUploaded">Uploaded</th>
-                </tr>
-              </thead>
-              <tbody id="doc-rows"></tbody>
-            </table>
-          </div>
-          <p class="muted" id="docs-empty" hidden></p>
-
-          <div class="pager">
+      <div class="table-card" id="table-card">
+        <div class="table-wrap" id="table-wrap">
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th class="col-check">
+                  <input type="checkbox" id="select-all" aria-label="Select every document on this page" data-i18n-aria-label="dashboard.selectPage" />
+                </th>
+                <th class="col-name" id="th-name" aria-sort="none">
+                  <button type="button" class="sort-btn" data-sort="name">
+                    <span data-i18n="dashboard.colName">Name</span><span class="sort-arrow" aria-hidden="true"></span>
+                  </button>
+                </th>
+                <th class="col-who" data-i18n="dashboard.whoItsFor">Who it's for</th>
+                <th class="col-status" data-i18n="dashboard.colStatus">Status</th>
+                <th class="col-date" id="th-date" aria-sort="none">
+                  <button type="button" class="sort-btn" data-sort="uploaded">
+                    <span data-i18n="dashboard.colUploaded">Uploaded</span><span class="sort-arrow" aria-hidden="true"></span>
+                  </button>
+                </th>
+                <th class="col-actions"><span class="visually-hidden" data-i18n="dashboard.actions">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="doc-rows"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="docs-empty" hidden></div>
+        <footer class="table-foot">
+          <span id="page-info" class="muted"></span>
+          <div class="pager" hidden>
             <button type="button" id="prev-page" class="btn-secondary" data-i18n="dashboard.previous">Previous</button>
-            <span id="page-info" class="muted"></span>
             <button type="button" id="next-page" class="btn-secondary" data-i18n="dashboard.next">Next</button>
           </div>
-        </div>
-
-        <aside class="panel dash-detail" id="detail" hidden aria-labelledby="detail-name">
-          <div class="detail-head">
-            <h2 id="detail-name"></h2>
-            <button type="button" id="detail-close" class="btn-icon" aria-label="Close details" data-i18n-aria-label="dashboard.closeDetails">&times;</button>
-          </div>
-          <div class="detail-meta" id="detail-meta"></div>
-          <div class="preview" id="preview"></div>
-          <div id="detail-editor"></div>
-          <p class="status" id="detail-status" role="status" aria-live="polite"></p>
-          <div class="detail-actions">
-            <button type="button" id="detail-save" data-i18n="dashboard.save">Save</button>
-            <a id="detail-download" class="btn-secondary btn-like" href="#" data-i18n="dashboard.download">Download</a>
-            <button type="button" id="detail-delete" class="btn-danger" data-i18n="dashboard.delete">Delete</button>
-          </div>
-        </aside>
-      </div>
-    </section>
-
-    <section id="view-markets" role="tabpanel" aria-labelledby="tab-markets" hidden>
-      <div class="panel market-global">
-        <h2 data-i18n="dashboard.global">Global</h2>
-        <p>
-          <span class="chip chip-global" data-i18n="dashboard.global">Global</span>
-          <span data-i18n="dashboard.globalText">Everyone, in every market. Documents not limited to any market.</span>
-          <span class="muted" id="global-count"></span>
-        </p>
-        <div class="market-docs" id="market-docs-global" hidden></div>
-      </div>
-
-      <div class="dash-markets">
-        <div class="panel">
-          <h2 data-i18n="dashboard.countriesHeading">Countries</h2>
-          <p class="muted" id="countries-summary"></p>
-          <ul id="country-list" class="market-list"></ul>
-          <div class="add-country">
-            <label class="field">
-              <span data-i18n="dashboard.addCountry">Add a country</span>
-              <input type="search" id="country-search" autocomplete="off"
-                     placeholder="Type a country name or code, e.g. Sweden or SE"
-                     data-i18n-placeholder="dashboard.addCountryPlaceholder" />
-            </label>
-            <ul id="country-results" class="country-results"></ul>
+          <button type="button" class="kbd-hint" id="shortcuts-btn" aria-keyshortcuts="?">
+            <kbd>?</kbd> <span data-i18n="dashboard.shortcuts">Keyboard shortcuts</span>
+          </button>
+        </footer>
+        <div class="dropzone" id="dropzone" hidden>
+          <div class="dropzone-inner">
+            <span class="dropzone-icon" id="dropzone-icon" aria-hidden="true"></span>
+            <strong data-i18n="dashboard.dropToUpload">Drop to upload</strong>
+            <span data-i18n="dashboard.dropToUploadHint">New files are for everyone (Global).</span>
           </div>
         </div>
-
-        <div class="panel">
-          <h2 data-i18n="dashboard.groupsHeading">Groups</h2>
-          <p class="muted" data-i18n="dashboard.groupsIntro">
-            Give a set of countries a name, like Scandinavia. A document for a group
-            follows any later change to it.
-          </p>
-          <ul id="group-list" class="group-list"></ul>
-          <button type="button" id="new-group-btn" data-i18n="dashboard.newGroup">New group</button>
-        </div>
       </div>
-    </section>
-  </main>
+    </main>
+
+    <aside class="drawer" id="detail" hidden aria-labelledby="detail-name">
+      <div class="detail-head">
+        <h2 id="detail-name"></h2>
+        <button type="button" id="detail-close" class="btn-icon" aria-label="Close details" data-i18n-aria-label="dashboard.closeDetails"></button>
+      </div>
+      <div class="detail-meta" id="detail-meta"></div>
+      <div class="preview" id="preview"></div>
+      <div id="detail-editor"></div>
+      <p class="status" id="detail-status" role="status" aria-live="polite"></p>
+      <div class="detail-actions">
+        <button type="button" id="detail-save" data-i18n="dashboard.save">Save</button>
+        <a id="detail-download" class="btn-secondary btn-like" href="#" data-i18n="dashboard.download">Download</a>
+        <button type="button" id="detail-delete" class="btn-danger" data-i18n="dashboard.delete">Delete</button>
+      </div>
+    </aside>
+  </div>
+
+  <div class="bulk-bar" id="bulk-bar" hidden>
+    <span id="bulk-count"></span>
+    <button type="button" id="bulk-audience-btn" class="btn-secondary" data-i18n="dashboard.setWho">Set who it's for...</button>
+    <button type="button" id="bulk-delete-btn" class="btn-danger" data-i18n="dashboard.deleteSelected">Delete...</button>
+    <button type="button" id="bulk-clear-btn" class="btn-icon" aria-label="Clear selection" data-i18n-aria-label="dashboard.clearSelection" title="Clear selection" data-i18n-title="dashboard.clearSelection"></button>
+  </div>
+
+  <section class="tray" id="queue" hidden aria-labelledby="queue-summary">
+    <div class="tray-head">
+      <span class="tray-icon" id="tray-icon" aria-hidden="true"></span>
+      <span class="tray-summary" id="queue-summary"></span>
+      <button type="button" class="btn-icon tray-toggle" id="queue-toggle" aria-expanded="true" aria-controls="queue-body"
+              aria-label="Hide uploads" data-i18n-aria-label="dashboard.hideUploads"></button>
+    </div>
+    <div class="tray-body" id="queue-body">
+      <ul id="queue-list" class="queue"></ul>
+      <button type="button" id="queue-clear-btn" class="btn-secondary" data-i18n="dashboard.clearFinished">Clear finished</button>
+    </div>
+  </section>
+
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
   <dialog id="audience-dialog" aria-labelledby="audience-dialog-title">
     <h2 id="audience-dialog-title"></h2>
@@ -186,6 +214,10 @@
 
   <dialog id="group-dialog" aria-labelledby="group-dialog-title">
     <h2 id="group-dialog-title"></h2>
+    <p class="hint" data-i18n="dashboard.groupsIntro">
+      Give a set of countries a name, like Scandinavia. A document for a group
+      follows any later change to it.
+    </p>
     <label class="field">
       <span data-i18n="dashboard.groupName">Name</span>
       <input type="text" id="group-name" maxlength="60" placeholder="e.g. Scandinavia"
@@ -205,16 +237,40 @@
     </div>
   </dialog>
 
-  <dialog id="preview-dialog" class="preview-dialog" aria-labelledby="preview-dialog-title">
-    <div class="detail-head">
-      <h2 id="preview-dialog-title"></h2>
-      <button type="button" id="preview-dialog-close" class="btn-icon" aria-label="Close preview" data-i18n-aria-label="dashboard.closePreview">&times;</button>
-    </div>
-    <div class="detail-meta" id="preview-dialog-meta"></div>
-    <div class="preview" id="preview-dialog-body"></div>
+  <dialog id="country-dialog" aria-labelledby="country-dialog-title">
+    <h2 id="country-dialog-title" data-i18n="dashboard.addCountry">Add a country</h2>
+    <input type="search" id="country-search" autocomplete="off"
+           placeholder="Type a country name or code, e.g. Sweden or SE"
+           aria-label="Add a country" data-i18n-aria-label="dashboard.addCountry"
+           data-i18n-placeholder="dashboard.addCountryPlaceholder" />
+    <ul id="country-results" class="country-results"></ul>
     <div class="dialog-actions">
-      <button type="button" class="btn-secondary" id="preview-dialog-who" data-i18n="dashboard.changeWho">Change who it's for</button>
-      <a id="preview-dialog-download" class="btn-like btn-primary" href="#" data-i18n="dashboard.download">Download</a>
+      <button type="button" class="btn-secondary" id="country-dialog-close" data-i18n="dashboard.close">Close</button>
+    </div>
+  </dialog>
+
+  <!-- Every "are you sure?", and what stands in the way when the answer is no. -->
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+    <h2 id="confirm-title"></h2>
+    <div class="confirm-body" id="confirm-body"></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn-secondary" id="confirm-cancel"></button>
+      <button type="button" id="confirm-ok"></button>
+    </div>
+  </dialog>
+
+  <dialog id="shortcuts-dialog" aria-labelledby="shortcuts-title">
+    <h2 id="shortcuts-title" data-i18n="dashboard.shortcuts">Keyboard shortcuts</h2>
+    <dl class="shortcuts">
+      <dt><kbd>/</kbd></dt><dd data-i18n="dashboard.kbSearch">Search</dd>
+      <dt><kbd>&uarr;</kbd> <kbd>&darr;</kbd></dt><dd data-i18n="dashboard.kbMove">Move between documents</dd>
+      <dt><kbd>Enter</kbd></dt><dd data-i18n="dashboard.kbOpen">Open the document</dd>
+      <dt><kbd>x</kbd></dt><dd data-i18n="dashboard.kbSelect">Select or deselect it</dd>
+      <dt><kbd>Esc</kbd></dt><dd data-i18n="dashboard.kbClose">Close, or clear the selection</dd>
+      <dt><kbd>?</kbd></dt><dd data-i18n="dashboard.kbHelp">Show these shortcuts</dd>
+    </dl>
+    <div class="dialog-actions">
+      <button type="button" class="btn-secondary" id="shortcuts-close" data-i18n="dashboard.close">Close</button>
     </div>
   </dialog>
 

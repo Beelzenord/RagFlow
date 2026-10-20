@@ -84,3 +84,56 @@ def targets_market_sql(doc: str = "d", param: str = "market") -> str:
         f" WHERE a.document_id = {doc}.id"
         f" AND (a.market_code = :{param} OR m.market_code = :{param}))"
     )
+
+
+def applies_to_market_sql(doc: str = "d", param: str = "market") -> str:
+    """SQL that is true when document `doc` is among what answers for the market
+    bound to `param` draw on: everyone's documents, plus those limited to it.
+
+    The same test retrieval filters with (applies_to_market_sql in
+    services/query/app/audience.py), so the dashboard's "Everything Sweden
+    sees" is exactly what Sweden's answers can use.
+    """
+    return f"({is_global_sql(doc)} OR {targets_market_sql(doc, param)})"
+
+
+def who_filter(who: str | None, include_global: bool = False) -> tuple[str | None, dict[str, str]]:
+    """The WHERE clause and params for the dashboard's "who it's for" filter.
+
+    `who` is "global", a country code (directly or through a group) or a group
+    id. `include_global` widens a country to everything its answers draw on; it
+    means nothing for the others, so it is refused there rather than ignored.
+    """
+    if not who:
+        if include_global:
+            raise AudienceError("include_global needs a country code in who")
+        return None, {}
+    if who == "global":
+        if include_global:
+            raise AudienceError("include_global needs a country code in who")
+        return is_global_sql(), {}
+    code = who.upper()
+    if MARKET_CODE.match(code):
+        sql = applies_to_market_sql(param="who") if include_global else targets_market_sql(param="who")
+        return sql, {"who": code}
+    try:
+        group_id = str(UUID(who))
+    except ValueError:
+        raise AudienceError("who must be 'global', a country code or a group id") from None
+    if include_global:
+        raise AudienceError("include_global needs a country code in who")
+    return (
+        "EXISTS (SELECT 1 FROM document_audience a WHERE a.document_id = d.id AND a.group_id = :who_group)",
+        {"who_group": group_id},
+    )
+
+
+# The document list's orders, by the name the dashboard asks for. Each breaks
+# ties on the id, so paging never shows a document twice or skips one.
+SORTS = {
+    "uploaded_desc": "d.created_at DESC, d.id",
+    "uploaded_asc": "d.created_at ASC, d.id",
+    "name_asc": "lower(d.original_filename) ASC, d.id",
+    "name_desc": "lower(d.original_filename) DESC, d.id",
+}
+DEFAULT_SORT = "uploaded_desc"

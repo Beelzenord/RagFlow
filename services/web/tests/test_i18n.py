@@ -99,6 +99,17 @@ class DictionaryTests(unittest.TestCase):
                 with self.subTest(script=script.name, key=key):
                     self.assertIn(key, self.en)
 
+    def test_every_dashboard_key_is_used(self) -> None:
+        # The other way round: wording the Dashboard no longer shows would
+        # otherwise linger in five languages, and be translated again for nothing.
+        source = "".join(
+            path.read_text(encoding="utf-8")
+            for path in (APP_DIR / "admin" / "dashboard.html", APP_DIR / "admin" / "dashboard.js")
+        )
+        for key in (k for k in self.en if k.startswith("dashboard.")):
+            with self.subTest(key=key):
+                self.assertRegex(source, rf'["\']{re.escape(key)}["\']')
+
     def test_translations_are_translated(self) -> None:
         # Most entries should differ from English. Equal ones are fine
         # ("Status", "Chat", "{n} dokument"), but a file that is mostly English

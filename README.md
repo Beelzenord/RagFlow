@@ -130,7 +130,7 @@ question at one document ("Search in") and see source details. A **reader**
 asks questions and downloads the documents an answer cites, but is never shown
 what else the corpus holds. To a reader the Dashboard does not exist: the
 switch is not in their page, `/dashboard` sends them back to the chat, and its
-script is a 404. On Azure the role comes from an Entra app role in the sign-in
+script and stylesheet are 404s. On Azure the role comes from an Entra app role in the sign-in
 token ([infra/README.md](infra/README.md)); locally there is one account and it
 is the admin.
 
@@ -150,8 +150,9 @@ cd services/query && python3 -m unittest discover -s tests -t .
 
 ## Markets: who each document is for
 
-An admin adds the countries the firm operates in (ISO 3166-1, picked by name on
-the Dashboard's **Markets** tab), and can name groups of them, for example
+An admin adds the countries the firm operates in (ISO 3166-1, picked by name
+with **+** beside Countries in the Dashboard's sidebar), and can name groups of
+them, for example
 *Scandinavia = Sweden, Norway, Denmark*. Each document is then either for
 **Everyone (Global)** or **only certain markets**: any mix of countries and
 groups. Global is the default, so every upload, and every document that existed
@@ -204,8 +205,8 @@ and a reader can still download any document an answer cites.
   with it at once. The edit dialog says how many documents that is.
 - **Nothing in use can be removed.** A country still in a group or named on a
   document, or a group still on a document, can't be removed. The Dashboard
-  disables the button and says why, and the database's foreign keys refuse it
-  regardless (409).
+  says what is in the way, with a button for each fix, and the database's
+  foreign keys refuse it regardless (409).
 - **Changing who a document is for never re-processes it.** Only the audience
   rows change; it applies from the next question.
 
@@ -214,7 +215,7 @@ Ingestion API (all behind `x-api-key`; the web BFF proxies each one as
 
 | Endpoint | Does |
 | --- | --- |
-| `GET /markets` | Countries and groups, with what uses each, plus the Global document count |
+| `GET /markets` | Countries and groups, with what uses each, plus the Global and total document counts |
 | `GET /markets/catalogue` | Every ISO country, marked `added` or not |
 | `POST /markets/countries` `{"code": "SE"}` | Add a country (name taken from ISO) |
 | `DELETE /markets/countries/{code}` | Remove one; 409 with the reason while in use |
@@ -223,9 +224,34 @@ Ingestion API (all behind `x-api-key`; the web BFF proxies each one as
 | `DELETE /markets/groups/{id}` | 409 while a document uses it |
 | `PUT /documents/{id}/audience` `{"everyone": false, "countries": ["DE"], "groups": ["<id>"]}` | Set who a document is for |
 | `PUT /documents/audience` `{"document_ids": [...], ...}` | The same for up to 500 documents, all or nothing |
-| `GET /documents?q=&who=&limit=&offset=` | `who` is `global`, a country code (directly or via a group) or a group id; returns `total` |
+| `GET /documents?q=&who=&include_global=&sort=&limit=&offset=` | `who` is `global`, a country code (directly or via a group) or a group id; `include_global=true` with a country adds everyone's documents, which is what its answers draw on; `sort` is `uploaded_desc` (default), `uploaded_asc`, `name_asc` or `name_desc`; returns `total` |
 
 Pass `"market": "SE"` to `POST /query` for the same filter the chat applies.
+
+### The Dashboard
+
+One library rather than tabs:
+
+- **The sidebar is the markets.** All documents, Global, each group and each
+  country work like folders, each with its count; picking one shows its
+  documents, and the address (`#country/SE`, `#group/<id>`) lets Back step
+  through them.
+- **A country's header** shows which groups it is in and switches between
+  *Limited to Sweden* and *Everything Sweden sees*: Sweden's own documents
+  plus the Global ones, exactly what its answers draw on.
+- **Drag to retag.** Drop documents (or a selection) on a market in the sidebar
+  to make them for it alone, as a file moves into a folder; Undo puts back what
+  each was for. Never "also for", because adding a market to a Global document
+  would narrow it.
+- **The drawer.** A document opens beside the table with its preview, who it is
+  for, Download and Delete. With it open, the arrow keys page through
+  documents.
+- **Upload** with the button, or by dropping PDF and JPEG files on the table.
+- **Keyboard:** `/` search, arrow keys move, `Enter` opens, `x` selects, `Esc`
+  closes, `?` lists these.
+
+Its styles are in `services/web/app/admin/dashboard.css`, served to admins only,
+like its script.
 
 The schema is `db/migrations/05-markets.sql`. Like `03` and `04`, it only runs
 by itself on a fresh Postgres volume; apply it to an existing one by hand:

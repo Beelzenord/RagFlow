@@ -7,12 +7,16 @@ from __future__ import annotations
 import unittest
 
 from app.audience import (
+    DEFAULT_SORT,
+    SORTS,
     Audience,
     AudienceError,
+    applies_to_market_sql,
     is_global_sql,
     normalize_code,
     targets_market_sql,
     validate_audience,
+    who_filter,
 )
 
 GROUP = "2beda27b-7389-496e-94e2-3f0e62268cef"
@@ -71,6 +75,64 @@ class SqlTests(unittest.TestCase):
             is_global_sql("x"),
             "NOT EXISTS (SELECT 1 FROM document_audience a WHERE a.document_id = x.id)",
         )
+
+
+    def test_applies_to_market_is_everyone_or_limited_to_it(self) -> None:
+        # What answers for a market draw on - the same test retrieval uses.
+        self.assertEqual(
+            applies_to_market_sql(param="who"),
+            f"({is_global_sql()} OR {targets_market_sql(param='who')})",
+        )
+
+
+class WhoFilterTests(unittest.TestCase):
+    def test_no_filter(self) -> None:
+        self.assertEqual(who_filter(None), (None, {}))
+        self.assertEqual(who_filter(""), (None, {}))
+
+    def test_global(self) -> None:
+        self.assertEqual(who_filter("global"), (is_global_sql(), {}))
+
+    def test_country_is_upper_cased(self) -> None:
+        self.assertEqual(who_filter("se"), (targets_market_sql(param="who"), {"who": "SE"}))
+
+    def test_country_with_global_is_what_its_answers_draw_on(self) -> None:
+        self.assertEqual(
+            who_filter("SE", include_global=True),
+            (applies_to_market_sql(param="who"), {"who": "SE"}),
+        )
+
+    def test_group(self) -> None:
+        sql, params = who_filter(GROUP.upper())
+        self.assertIn("a.group_id = :who_group", sql)
+        self.assertEqual(params, {"who_group": GROUP})
+
+    def test_include_global_needs_a_country(self) -> None:
+        for who in (None, "global", GROUP):
+            with self.subTest(who=who), self.assertRaises(AudienceError):
+                who_filter(who, include_global=True)
+
+    def test_garbage_is_refused(self) -> None:
+        for who in ("Sweden", "S", "1; DROP TABLE documents"):
+            with self.subTest(who=who), self.assertRaises(AudienceError):
+                who_filter(who)
+
+
+class SortTests(unittest.TestCase):
+    def test_every_order_breaks_ties_on_the_id(self) -> None:
+        # Otherwise documents with the same name or time could repeat or go
+        # missing between pages.
+        for name, order in SORTS.items():
+            with self.subTest(name):
+                self.assertTrue(order.endswith(", d.id"), order)
+
+    def test_default_is_newest_first(self) -> None:
+        self.assertEqual(SORTS[DEFAULT_SORT], "d.created_at DESC, d.id")
+
+    def test_names_are_plain_words(self) -> None:
+        # They become a regex alternation in the route's validation.
+        for name in SORTS:
+            self.assertRegex(name, r"^[a-z_]+$")
 
 
 if __name__ == "__main__":

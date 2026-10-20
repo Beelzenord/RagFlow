@@ -162,6 +162,21 @@ class MarketsProxyTests(_Harness):
         client.get("/api/documents?q=policy&who=SE&limit=25&offset=50")
         self.assertEqual(calls[0]["params"], {"q": "policy", "who": "SE", "limit": 25, "offset": 50})
 
+    def test_document_list_forwards_scope_and_sort(self) -> None:
+        client = self.client("admin")
+        calls: list[dict] = []
+
+        async def fake_get(url: str, **kwargs: object) -> httpx.Response:
+            calls.append({"url": url, **kwargs})
+            return httpx.Response(200, json={"documents": [], "total": 0}, request=httpx.Request("GET", url))
+
+        self.main.app.state.http.get = fake_get
+        client.get("/api/documents?who=SE&include_global=true&sort=name_asc")
+        self.assertEqual(calls[0]["params"], {"who": "SE", "include_global": "true", "sort": "name_asc"})
+        # Off is the default, so it is not sent at all.
+        client.get("/api/documents?who=SE&include_global=false")
+        self.assertEqual(calls[1]["params"], {"who": "SE"})
+
 
 @unittest.skipUnless(HTTP_DEPS, "needs fastapi and httpx")
 class DashboardPageTests(_Harness):
@@ -177,6 +192,10 @@ class DashboardPageTests(_Harness):
         client = self.client("reader")
         self.assertEqual(client.get("/dashboard/dashboard.js").status_code, 404)
 
+    def test_reader_gets_no_styles(self) -> None:
+        client = self.client("reader")
+        self.assertEqual(client.get("/dashboard/dashboard.css").status_code, 404)
+
     def test_admin_gets_the_page_and_script(self) -> None:
         client = self.client("admin")
         page = client.get("/dashboard")
@@ -185,10 +204,13 @@ class DashboardPageTests(_Harness):
         script = client.get("/dashboard/dashboard.js")
         self.assertEqual(script.status_code, 200)
         self.assertIn("javascript", script.headers["content-type"])
+        styles = client.get("/dashboard/dashboard.css")
+        self.assertEqual(styles.status_code, 200)
+        self.assertIn("text/css", styles.headers["content-type"])
 
     def test_dashboard_files_are_not_in_the_public_static_folder(self) -> None:
         client = self.client("reader")
-        for path in ("/dashboard.html", "/dashboard.js", "/admin/dashboard.html"):
+        for path in ("/dashboard.html", "/dashboard.js", "/dashboard.css", "/admin/dashboard.html"):
             with self.subTest(path=path):
                 self.assertEqual(client.get(path).status_code, 404)
 

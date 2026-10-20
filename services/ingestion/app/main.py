@@ -26,13 +26,14 @@ from rag_shared.security import require_service_key
 from rag_shared.settings import settings
 
 from .audience import (
-    MARKET_CODE,
+    DEFAULT_SORT,
+    SORTS,
     Audience,
     AudienceError,
     is_global_sql,
     normalize_code,
-    targets_market_sql,
     validate_audience,
+    who_filter,
 )
 from .countries import ISO_COUNTRIES
 from .pipeline import run_ingestion
@@ -201,6 +202,11 @@ async def list_documents(
         default=None,
         description="'global', a country code (directly or through a group), or a group id",
     ),
+    include_global: bool = Query(
+        default=False,
+        description="With a country code in who: everyone's documents too - what its answers draw on",
+    ),
+    sort: str = Query(default=DEFAULT_SORT, pattern="^(" + "|".join(SORTS) + ")$"),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
@@ -215,25 +221,17 @@ async def list_documents(
     if q and q.strip():
         clauses.append("d.original_filename ILIKE :q ESCAPE '\\'")
         params["q"] = _like_pattern(q.strip())
-    if who:
-        if who == "global":
-            clauses.append(is_global_sql())
-        elif MARKET_CODE.match(who.upper()):
-            clauses.append(targets_market_sql(param="who"))
-            params["who"] = who.upper()
-        else:
-            try:
-                params["who_group"] = str(UUID(who))
-            except ValueError:
-                raise HTTPException(400, "who must be 'global', a country code or a group id") from None
-            clauses.append(
-                "EXISTS (SELECT 1 FROM document_audience a "
-                "WHERE a.document_id = d.id AND a.group_id = :who_group)"
-            )
+    try:
+        who_clause, who_params = who_filter(who, include_global)
+    except AudienceError as exc:
+        raise HTTPException(400, str(exc)) from None
+    if who_clause:
+        clauses.append(who_clause)
+        params.update(who_params)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = (
         f"SELECT {_DOCUMENT_COLUMNS} FROM documents d {where} "
-        "ORDER BY d.created_at DESC, d.id LIMIT :limit OFFSET :offset"
+        f"ORDER BY {SORTS[sort]} LIMIT :limit OFFSET :offset"
     )
     async with session_scope() as session:
         total = (await session.execute(text(f"SELECT count(*) FROM documents d {where}"), params)).scalar_one()
@@ -379,7 +377,7 @@ async def list_markets() -> dict[str, Any]:
     through a group; `direct_documents` and `groups` are what block removing it.
     The dashboard lists the documents behind each count with list_documents'
     `who` filter, so these counts must stay the same test as that filter
-    (targets_market_sql, the group id match, is_global_sql).
+    (audience.who_filter). `total_documents` is its "All".
     """
     async with session_scope() as session:
         countries = (
@@ -412,10 +410,12 @@ async def list_markets() -> dict[str, Any]:
         global_documents = (
             await session.execute(text(f"SELECT count(*) FROM documents d WHERE {is_global_sql()}"))
         ).scalar_one()
+        total_documents = (await session.execute(text("SELECT count(*) FROM documents"))).scalar_one()
     return {
         "countries": [dict(r) for r in countries],
         "groups": [{**dict(r), "id": str(r["id"])} for r in groups],
         "global_documents": global_documents,
+        "total_documents": total_documents,
     }
 
 
