@@ -32,6 +32,11 @@ load_azure_env() {
   ACA_STORAGE_NAME="${ACA_STORAGE_NAME:-ragfiles}"
   POSTGRES_USER="${POSTGRES_USER:-ragadmin}"
   POSTGRES_DB="${POSTGRES_DB:-rag}"
+  # When the web app keeps a replica warm (cron, in WEB_WARM_TIMEZONE). "-" not
+  # ":-", so WEB_WARM_START= in azure.env deliberately switches the window off.
+  WEB_WARM_TIMEZONE="${WEB_WARM_TIMEZONE-Europe/Stockholm}"
+  WEB_WARM_START="${WEB_WARM_START-0 6 * * 1-5}"
+  WEB_WARM_END="${WEB_WARM_END-0 19 * * 1-5}"
   # entra: Container Apps authentication signs people in with their work
   # account. password: the app's own shared login. Defaults to entra because the
   # web app has a public FQDN, and deploy.sh refuses to ship entra mode unless

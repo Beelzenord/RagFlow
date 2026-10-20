@@ -81,6 +81,7 @@ update_python_app() {
 # pipeline in FastAPI BackgroundTasks, which hold no in-flight request, so
 # a replica scaled to zero would be reclaimed mid-parse and silently drop
 # the job. It can go to 0 once ingestion moves to the Redis queue.
+# Web is warm only during working hours; see the scale step after its update.
 update_python_app "$INGEST_APP" ingestion 8001 1 1
 update_python_app "$QUERY_APP" query 8002 1 2
 
@@ -132,8 +133,6 @@ az containerapp update \
   --resource-group "$RESOURCE_GROUP" \
   --image "$ACR_LOGIN_SERVER/web:$SHA" \
   --set-env-vars "${web_env[@]}" \
-  --min-replicas 0 \
-  --max-replicas 2 \
   --output none
 
 if [[ "$AUTH_MODE" == "entra" ]]; then
@@ -145,6 +144,30 @@ if [[ "$AUTH_MODE" == "entra" ]]; then
     --remove-env-vars ADMIN_PASSWORD ADMIN_USERNAME \
     --output none 2>/dev/null || true
 fi
+
+# The one place the web app's scale is set. Idle, it scales to zero, and the
+# first visitor waits ~15 s for a container (measured). A cron rule keeps one
+# replica up through the working day; outside it the HTTP rule still wakes the
+# app on the first request. _scale_web.py writes both rules, because adding a
+# cron rule alone would switch off the default HTTP one.
+if [[ -n "$WEB_WARM_START" ]]; then
+  echo "→ scale $WEB_APP: warm '$WEB_WARM_START' to '$WEB_WARM_END' ($WEB_WARM_TIMEZONE), else scale to zero"
+else
+  echo "→ scale $WEB_APP: scale to zero when idle (WEB_WARM_START is empty)"
+fi
+tmp="$(mktemp)"
+az containerapp show \
+  --name "$WEB_APP" \
+  --resource-group "$RESOURCE_GROUP" \
+  --output json \
+  | python3 "$SCRIPT_DIR/_scale_web.py" "$WEB_WARM_TIMEZONE" "$WEB_WARM_START" "$WEB_WARM_END" \
+  > "$tmp"
+az containerapp update \
+  --name "$WEB_APP" \
+  --resource-group "$RESOURCE_GROUP" \
+  --yaml "$tmp" \
+  --output none
+rm -f "$tmp"
 az containerapp ingress update \
   --name "$WEB_APP" \
   --resource-group "$RESOURCE_GROUP" \
