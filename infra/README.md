@@ -96,9 +96,10 @@ Everyone who can sign in still sees the same corpus: Entra decides *who gets in*
 
 ## Cold start
 
-`query` and `ingestion` both keep one warm replica; `web` still scales to zero.
-Query is pinned because it is the only service a user waits on synchronously —
-a scale-from-zero start would land entirely in the first question's latency.
+`query` and `ingestion` both keep one warm replica; `web` is warm during working
+hours and scales to zero outside them (see below). Query is pinned because it is
+the only service a user waits on synchronously — a scale-from-zero start would
+land entirely in the first question's latency.
 Ingestion is pinned for a different reason: it runs its pipeline in FastAPI
 `BackgroundTasks`, which hold no in-flight HTTP request, so a replica scaled to
 zero can be reclaimed mid-parse and silently drop the job. It can safely drop to
@@ -109,15 +110,51 @@ The query service also warms its connection pool and the HNSW index at startup
 does not pay for a cold pool or an index read off disk. It reuses a stored
 embedding as the probe vector, so it costs no API tokens.
 
-### TODO — tune the scale-down cooldown (not implemented)
+### The web app: warm on weekdays, 06:00–19:00
 
-An alternative to a permanently warm replica: raise the scale rule's
-`cooldownPeriod` (default 300s) to roughly an hour, so a replica stays warm
-through a working session and still drops to zero overnight. Cheaper than
-always-on, at the cost of a cold first question each morning. It lives under
-`properties.template.scale` and likely needs `az containerapp update --yaml`
-rather than a CLI flag — verify against the current API version before relying
-on it.
+Idle for about five minutes, the web app scales to zero, and the next visitor
+waits for a container to start. Measured: **15.8 s** for the first request after
+nine idle minutes, 0.04 s for the ones after it. Because the web app is the page
+you open first, that wait was what "the site is slow" meant.
+
+`deploy.sh` therefore gives the web app two scale rules (written by
+`_scale_web.py`):
+
+- **office-hours** — a cron rule that holds one replica up Mon–Fri 06:00–19:00
+  Stockholm time, so nobody opening the site during the day meets a cold start.
+- **http** — Container Apps' usual rule, written out explicitly. Outside the
+  window it is what wakes the app on the first request (~15 s) and lets it go
+  back to zero afterwards. It has to be explicit: the platform's default HTTP
+  rule only applies to an app with no rules at all, so a cron rule on its own
+  would leave nothing to start the app in the evening — the site would be down.
+
+Cost: one 0.5 vCPU / 1 GiB replica at the idle rate for ~65 hours a week, about
+$4–5/month (check current Azure pricing). Public holidays are warm too; that is
+not worth the complexity of avoiding.
+
+Change the window in `azure.env` — `WEB_WARM_TIMEZONE`, `WEB_WARM_START`,
+`WEB_WARM_END` (cron: minute hour day month weekday; quote the values) — and run
+`deploy.sh`. `WEB_WARM_START=` (empty) switches it off: scale to zero all day,
+as before.
+
+Check it after a deploy:
+
+```bash
+az containerapp show -n ragflow-web -g rg-ragflow --query properties.template.scale
+az containerapp replica list -n ragflow-web -g rg-ragflow --query "length(@)"
+```
+
+During the window the replica count stays at 1 or more however long the site is
+idle; on a weekday evening after about 19:10 it drops to 0, and a request still
+gets through after the cold start.
+
+### Not done — a longer scale-down cooldown
+
+Another option: raise `cooldownPeriod` (default 300s) to roughly an hour, so a
+replica stays warm through a working session. The office-hours rule already
+covers the case that mattered — the first visit of the day — so this stays a
+further option rather than a TODO. It lives under `properties.template.scale`,
+the same place `_scale_web.py` writes.
 
 Do **not** solve this with a cron keep-alive ping. With a 300s cooldown that
 means pinging every ~4 minutes, which keeps a replica up around the clock
