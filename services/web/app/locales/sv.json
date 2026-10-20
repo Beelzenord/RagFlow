@@ -13,6 +13,7 @@
   "chat.hint": "Hur kan vi hjälpa till? Fråga bara.",
   "chat.answersFor": "Svar för",
   "chat.allMarkets": "Alla marknader",
+  "chat.marketGuessed": "Valt utifrån webbläsarens språkinställningar - du kan välja en annan när som helst",
   "chat.searchIn": "Sök i",
   "chat.allDocuments": "Alla dokument",
   "chat.showSources": "Visa källdetaljer",

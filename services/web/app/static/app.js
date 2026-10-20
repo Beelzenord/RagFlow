@@ -21,6 +21,13 @@ const state = {
   // What the two pickers were last filled from, so a language switch can
   // relabel them without asking the server again.
   marketCountries: [],
+  // "Answers for" is decided once per page load (see initialMarket); after that
+  // a re-render keeps whatever is selected, so the picker never flips under
+  // someone mid-conversation.
+  marketDecided: false,
+  // True while the selection is our guess from the browser's region rather than
+  // this person's own choice.
+  marketGuessed: false,
   pickerDocs: [],
   // Set from /api/me. Starts false so a reader is never briefly offered a
   // control the server would refuse; the server checks again regardless.
@@ -119,23 +126,44 @@ function renderDocumentPicker() {
 }
 
 // "Answers for": the asker's market. Answers then draw on documents for
-// everyone plus documents for that market. Remembered per browser; a market an
-// admin has since removed falls back to all markets rather than to nothing.
+// everyone plus documents for that market.
+//
+// What is stored is only ever this person's own choice: a country code, or
+// ALL_MARKETS for a deliberate "All markets" - kept distinct from "never chosen"
+// (no key), or a default guess would override that choice on every visit. The
+// guess itself is never stored, so it can improve (a market added later, a
+// browser set up differently) instead of hardening into a choice nobody made.
+const ALL_MARKETS = "all";
+
 function loadSavedMarket() {
   try {
-    return localStorage.getItem(MARKET_KEY) || "";
+    const value = localStorage.getItem(MARKET_KEY);
+    if (value === ALL_MARKETS) return { kind: "all", code: "" };
+    if (value && /^[A-Z]{2}$/.test(value)) return { kind: "code", code: value };
   } catch {
-    return "";
+    /* storage disabled - nothing chosen */
   }
+  return { kind: "none", code: "" };
 }
 
 function saveMarket(code) {
   try {
-    if (code) localStorage.setItem(MARKET_KEY, code);
-    else localStorage.removeItem(MARKET_KEY);
+    localStorage.setItem(MARKET_KEY, code || ALL_MARKETS);
   } catch {
-    /* ignore */
+    /* the choice lasts for this page only */
   }
+}
+
+// Where "Answers for" starts: this person's choice if it is still a market, or
+// their deliberate "All markets"; otherwise the first country in their browser's
+// language settings that is a market (sv-SE -> Sweden); otherwise all markets.
+// A saved country an admin has since removed counts as no choice.
+function initialMarket(codes) {
+  const saved = loadSavedMarket();
+  if (saved.kind === "code" && codes.includes(saved.code)) return { code: saved.code, guessed: false };
+  if (saved.kind === "all") return { code: "", guessed: false };
+  const guess = Lang.browserRegions().find((region) => codes.includes(region));
+  return guess ? { code: guess, guessed: true } : { code: "", guessed: false };
 }
 
 async function loadMarketPicker() {
@@ -177,13 +205,27 @@ function renderMarketPicker() {
     opt.textContent = c.name;
     options.push(opt);
   }
-  const current = els.marketSelect.value || loadSavedMarket();
+  const codes = countries.map((c) => c.code);
+  let selected = els.marketSelect.value;
+  // Decided on the first render with markets, and again only if the selected
+  // market has since been removed.
+  if (!state.marketDecided || (selected && !codes.includes(selected))) {
+    const start = initialMarket(codes);
+    selected = start.code;
+    state.marketGuessed = start.guessed;
+    state.marketDecided = true;
+  }
   els.marketSelect.replaceChildren(...options);
-  els.marketSelect.value = countries.some((c) => c.code === current) ? current : "";
+  els.marketSelect.value = selected;
+  els.marketSelect.title = state.marketGuessed ? Lang.t("chat.marketGuessed") : "";
   els.marketField.hidden = false;
 }
 
-els.marketSelect.addEventListener("change", () => saveMarket(els.marketSelect.value));
+els.marketSelect.addEventListener("change", () => {
+  saveMarket(els.marketSelect.value);
+  state.marketGuessed = false;
+  els.marketSelect.title = "";
+});
 
 function currentMarket() {
   return els.marketField.hidden ? null : els.marketSelect.value || null;
@@ -509,12 +551,31 @@ function renderSourceDocs(list) {
     a.download = name;
     a.title = Lang.t("chat.download", { name });
     a.textContent = name;
+    const market = marketTag(c.audience);
+    if (market) a.appendChild(market);
     links.appendChild(a);
   }
 
   if (!links.childNodes.length) return document.createDocumentFragment();
   wrap.appendChild(links);
   return wrap;
+}
+
+// "· Sverige" after a source that is limited to certain markets, so it is plain
+// which country an answer came from. Nothing for a document that is for
+// everyone. Countries are named in the reader's language, like the rest of the
+// message, and keep that wording if the language changes later; group names
+// are shown as the admin typed them.
+function marketTag(audience) {
+  const countries = Array.isArray(audience?.countries) ? audience.countries.map(String) : [];
+  const groups = Array.isArray(audience?.groups) ? audience.groups.map(String) : [];
+  const names = [...countries.map((code) => Lang.region(code)), ...groups].filter(Boolean);
+  if (!names.length) return null;
+  const span = document.createElement("span");
+  span.className = "source-doc-market";
+  span.textContent = ` · ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` +${names.length - 2}` : ""}`;
+  span.title = names.join(", ");
+  return span;
 }
 
 function renderCitations(list) {

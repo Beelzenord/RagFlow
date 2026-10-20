@@ -13,6 +13,7 @@
   "chat.hint": "How can we help? Just ask.",
   "chat.answersFor": "Answers for",
   "chat.allMarkets": "All markets",
+  "chat.marketGuessed": "Chosen from your browser's language settings - pick another anytime",
   "chat.searchIn": "Search in",
   "chat.allDocuments": "All documents",
   "chat.showSources": "Show source details",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Literal
 
@@ -11,6 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
 from rag_shared.db import session_scope
 from rag_shared.embeddings import EmbeddingClient
@@ -18,7 +20,15 @@ from rag_shared.llm import LLMClient, Turn
 from rag_shared.security import require_service_key
 from rag_shared.settings import settings
 
-from .audience import market_filter
+from .audience import (
+    AUDIENCE_LABELS_SQL,
+    MARKET_NAME_SQL,
+    audience_by_document,
+    citation_audience,
+    market_filter,
+    market_guidance,
+    prompt_label,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("query")
@@ -216,6 +226,14 @@ async def _rewrite_question(req: QueryRequest, llm: LLMClient) -> str:
     return candidate
 
 
+class CitationAudience(BaseModel):
+    """Who a cited document applies to. Country codes, so the page can name them
+    in the reader's language, and group names - never group members."""
+
+    countries: list[str] = Field(default_factory=list)
+    groups: list[str] = Field(default_factory=list)
+
+
 class Citation(BaseModel):
     n: int
     document_id: str
@@ -227,6 +245,8 @@ class Citation(BaseModel):
     score: float
     # Which retriever(s) found this chunk: "dense", "lexical", or "both".
     retrieval: str = "dense"
+    # None for a document that is for everyone.
+    audience: CitationAudience | None = None
 
 
 class QueryResponse(BaseModel):
@@ -428,15 +448,37 @@ async def _retrieve_and_format(
     if not rows:
         return [], None
 
+    audiences, chosen_market = await _audience_context(rows, req)
+    return _format_sources(req, rows, audiences, chosen_market)
+
+
+def _format_sources(
+    req: QueryRequest,
+    rows: list[Any],
+    audiences: dict[str, dict[str, list]],
+    chosen_market: str | None,
+) -> tuple[list[Citation], str]:
+    """The citations and the user message for the retrieved rows. Pure, so the
+    "no markets, no change" promise below is testable without a database."""
+    # Marks and guidance only when something is limited to a market: a corpus
+    # without markets, or an answer drawn only from documents for everyone, gets
+    # exactly the prompt it always did.
+    limited = any(prompt_label(audiences.get(str(r["document_id"]))) for r in rows)
+
     blocks: list[str] = []
     citations: list[Citation] = []
     for i, r in enumerate(rows, start=1):
+        audience = audiences.get(str(r["document_id"]))
         loc = f"{r['original_filename']}"
         if r["page_number"]:
             loc += f", p.{r['page_number']}"
         if r["heading"]:
             loc += f" — {r['heading']}"
-        blocks.append(f"[{i}] ({loc})\n{r['content']}")
+        header = f"[{i}] ({loc})"
+        if limited:
+            header += f" — applies to: {prompt_label(audience) or 'everyone'}"
+        blocks.append(f"{header}\n{r['content']}")
+        browser_audience = citation_audience(audience)
         citations.append(
             Citation(
                 n=i,
@@ -446,16 +488,59 @@ async def _retrieve_and_format(
                 heading=r["heading"],
                 score=float(r["score"]),
                 retrieval=_retrieval_label(r["in_dense"], r["in_lexical"]),
+                audience=CitationAudience(**browser_audience) if browser_audience else None,
             )
         )
 
+    guidance = market_guidance(chosen_market) + "\n\n" if limited else ""
     user_msg = (
         f"Question: {req.question}\n\n"
-        "Sources:\n" + "\n\n".join(blocks) + "\n\n"
+        "Sources:\n" + "\n\n".join(blocks) + "\n\n" + guidance +
         "Please answer the question using only these sources, in a warm and conversational "
         "tone. Do not include [#] citation markers in the answer."
     )
     return citations, user_msg
+
+
+# While the markets tables are missing, labels are skipped instead of looked up
+# on every question; checked again after this many seconds, so applying the
+# migration by hand to a running stack takes effect without a restart.
+_AUDIENCE_RETRY_SECONDS = 600
+_audience_retry_at = 0.0
+
+
+async def _audience_context(
+    rows: list[Any], req: QueryRequest
+) -> tuple[dict[str, dict[str, list]], str | None]:
+    """Who each retrieved document is for, and the asker's market by name.
+
+    Its own session, so a database that predates the markets migration (Azure
+    before migrate.sh) loses the labels but still answers - the main retrieval
+    has already finished by now. A named document overrides the market, exactly
+    as it does in market_filter, so no market is claimed for the asker then.
+    """
+    global _audience_retry_at
+    if time.monotonic() < _audience_retry_at:
+        return {}, None
+    ids = list(dict.fromkeys(str(r["document_id"]) for r in rows))
+    try:
+        async with session_scope() as session:
+            found = (await session.execute(text(AUDIENCE_LABELS_SQL), {"ids": ids})).mappings().all()
+            chosen: str | None = None
+            if req.market and not req.document_id:
+                name = (
+                    await session.execute(text(MARKET_NAME_SQL), {"code": req.market})
+                ).scalar_one_or_none()
+                chosen = name or req.market
+    except ProgrammingError as exc:
+        # 42P01 undefined_table: the markets tables are not there yet.
+        orig = exc.orig
+        if (getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)) != "42P01":
+            raise
+        log.warning("market tables missing - answering without market labels (apply migration 05)")
+        _audience_retry_at = time.monotonic() + _AUDIENCE_RETRY_SECONDS
+        return {}, None
+    return audience_by_document(found), chosen
 
 
 @app.post("/query", response_model=QueryResponse, dependencies=[Depends(require_service_key)])

@@ -162,6 +162,40 @@ remembered per browser and hidden while no markets exist. With a market picked,
 answers draw on Global documents plus documents for that market. **All markets**
 searches everything. Aiming a question at one document overrides the market.
 
+Until someone picks, **Answers for starts from their browser's language
+settings**:
+
+- **Which region wins.** It takes the first region in the browser's language
+  list that is one of your markets (`sv-SE` gives Sweden), ranking regions
+  carried by English last. `en-US` is the default English setting worldwide, so
+  a Swede with `en-US, sv-SE` starts on Sweden; someone with only `en-US` starts
+  on the US.
+- **What doesn't count.** A language without a region (`sv`) names no country,
+  because Swedish is also spoken in Finland. The time zone isn't used at all:
+  Windows reports `Europe/Berlin` for most of western Europe.
+- **What's remembered.** The guess is never saved, so it can't harden into a
+  choice nobody made. A person's own pick is saved, including a deliberate
+  "All markets". A saved market an admin later removes falls back to the guess.
+
+**Answers say which market they apply to.** When any source behind an answer is
+limited to certain markets, the model is told who each source applies to:
+
+- **Naming the country.** It names the country ("In Sweden three days, in
+  Norway two") and never presents one market's rule as everyone's.
+- **Who wins.** A market-specific document beats a Global one for that market:
+  with "Global: 10 days" and "Sweden: 15 days", Sweden gets 15, and All markets
+  gets "15 in Sweden, 10 elsewhere".
+- **Language.** The answer stays in the language of the question.
+- **Source links.** Each link under the answer shows its market, as in
+  `remote-work-policy.pdf · Sverige`. Group names are shown, never what a group
+  contains.
+- **Without markets, nothing changes.** When every source is Global, the prompt
+  is exactly what it was before markets existed.
+
+This can only name a market whose document was retrieved. If a country's
+paragraph ranks below the six chunks that reach the answer, the answer says the
+sources don't cover that country rather than guessing.
+
 This steers relevance; it is **not access control**. Anyone can switch markets,
 and a reader can still download any document an answer cites.
 
