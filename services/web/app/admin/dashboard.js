@@ -6,6 +6,9 @@
 
 const PAGE_SIZE = 25;
 const TICK_MS = 3000;
+// Rows in a market's own list on the Markets tab; the rest are a click away in
+// the Documents table.
+const MARKET_LIST_LIMIT = 10;
 
 const state = {
   markets: { countries: [], groups: [], global_documents: 0 },
@@ -18,6 +21,12 @@ const state = {
   selected: new Set(),
   detail: null,
   previewUrl: null,
+  // The Markets tab's open document lists, keyed as the Who filter is
+  // ("global", a country code, a group id), and what each last showed.
+  expanded: new Set(),
+  marketDocs: new Map(),
+  // The document in the preview pop-up, while it is open.
+  preview: null,
   queue: [],
   queueBusy: false,
   nextQid: 1,
@@ -62,6 +71,7 @@ const els = {
   detailDownload: $("detail-download"),
   detailDelete: $("detail-delete"),
   globalCount: $("global-count"),
+  globalDocs: $("market-docs-global"),
   countriesSummary: $("countries-summary"),
   countryList: $("country-list"),
   countrySearch: $("country-search"),
@@ -83,6 +93,13 @@ const els = {
   groupDialogStatus: $("group-dialog-status"),
   groupDialogCancel: $("group-dialog-cancel"),
   groupDialogSave: $("group-dialog-save"),
+  previewDialog: $("preview-dialog"),
+  previewDialogTitle: $("preview-dialog-title"),
+  previewDialogClose: $("preview-dialog-close"),
+  previewDialogMeta: $("preview-dialog-meta"),
+  previewDialogBody: $("preview-dialog-body"),
+  previewDialogWho: $("preview-dialog-who"),
+  previewDialogDownload: $("preview-dialog-download"),
 };
 
 // --- Small helpers -------------------------------------------------------------
@@ -195,6 +212,19 @@ function statusBadge(doc) {
 
 function formatDate(iso) {
   return Lang.date(iso);
+}
+
+// The stored original, as uploaded. A download unless ?inline=true is added.
+function fileUrl(doc) {
+  return `/api/documents/${encodeURIComponent(doc.id)}/file`;
+}
+
+// Rebuilding part of the page drops keyboard focus; this puts it back on the
+// control with the same data-focus-key, when that control is still there.
+function keepFocus(rebuild) {
+  const key = document.activeElement?.dataset?.focusKey;
+  rebuild();
+  if (key) document.querySelector(`[data-focus-key="${CSS.escape(key)}"]`)?.focus();
 }
 
 function formatBytes(n) {
@@ -467,6 +497,8 @@ function showView() {
     tab.setAttribute("aria-selected", active ? "true" : "false");
     els.views[name].hidden = !active;
   }
+  // Back, or a tab, leaves the Markets tab - and the pop-up opened from it.
+  if (els.previewDialog.open) els.previewDialog.close();
   setStatus(els.status, "");
 }
 
@@ -486,15 +518,32 @@ async function loadMarkets() {
     flash(t("dashboard.loadMarketsFailed", { message: err.message }), "error");
     return;
   }
+  // What a closed list last showed may be out of date by the time it is opened
+  // again; open ones keep showing theirs until the refresh below replaces it.
+  for (const key of state.marketDocs.keys()) {
+    if (!state.expanded.has(key)) state.marketDocs.delete(key);
+  }
   renderMarkets();
+  for (const key of state.expanded) loadMarketDocs(key);
   renderWhoFilter();
   detailEditor.render();
   dialogEditor.render();
 }
 
 function renderMarkets() {
+  keepFocus(drawMarkets);
+}
+
+function drawMarkets() {
   const { countries, groups, global_documents: globalDocs } = state.markets;
-  els.globalCount.textContent = `(${t("dashboard.documents", { n: globalDocs })})`;
+  pruneExpanded();
+  if (globalDocs) {
+    els.globalCount.replaceChildren(docsToggle("global", globalDocs));
+  } else {
+    els.globalCount.textContent = `(${t("dashboard.documents", { n: globalDocs })})`;
+  }
+  els.globalDocs.hidden = !state.expanded.has("global");
+  els.globalDocs.replaceChildren(...marketDocsContent("global"));
   els.countriesSummary.textContent = countries.length
     ? t("dashboard.countriesSummary", { count: t("dashboard.countries", { n: countries.length }) })
     : t("dashboard.noCountries");
@@ -502,9 +551,7 @@ function renderMarkets() {
   els.countryList.replaceChildren(
     ...sortedCountries().map((c) => {
       const name = countryName(c.code);
-      const usage = [];
-      if (c.documents) usage.push(t("dashboard.documents", { n: c.documents }));
-      if (c.groups?.length) usage.push(t("dashboard.inGroups", { groups: c.groups.join(", ") }));
+      const inGroups = c.groups?.length ? t("dashboard.inGroups", { groups: c.groups.join(", ") }) : "";
       // What actually blocks removal: a group containing it, or a document
       // that names it directly. The database refuses either way.
       const reasons = removalReasons(c.groups, c.direct_documents);
@@ -518,7 +565,13 @@ function renderMarkets() {
           { class: "market-main" },
           el("span", { class: "market-name", text: name }),
           el("span", { class: "market-code", text: c.code }),
-          el("span", { class: "muted", text: usage.join(" - ") }),
+          el(
+            "span",
+            { class: "muted" },
+            c.documents ? docsToggle(c.code, c.documents) : null,
+            c.documents > 0 && inGroups ? " - " : null,
+            inGroups || null,
+          ),
         ),
         el("button", {
           type: "button",
@@ -530,6 +583,7 @@ function renderMarkets() {
           onclick: () => removeCountry(c),
         }),
         blocked ? el("p", { class: "market-why", text: why }) : null,
+        docsBox(c.code),
       );
     }),
   );
@@ -547,7 +601,7 @@ function renderMarkets() {
           "div",
           { class: "group-head" },
           el("strong", { text: g.name }),
-          el("span", { class: "muted", text: t("dashboard.documents", { n: g.documents }) }),
+          docsToggle(g.id, g.documents),
         ),
         el(
           "div",
@@ -568,6 +622,7 @@ function renderMarkets() {
           }),
         ),
         blocked ? el("p", { class: "market-why", text: why }) : null,
+        docsBox(g.id),
       );
     }),
   );
@@ -586,6 +641,189 @@ function removalReasons(groups, directDocuments) {
   if (groups?.length) reasons.push(t("dashboard.blockedInGroups", { groups: groups.join(", ") }));
   if (directDocuments) reasons.push(t("dashboard.blockedDocuments", { n: directDocuments }));
   return reasons.join(` ${t("dashboard.and")} `);
+}
+
+// --- Markets: the documents behind each count -----------------------------------
+// "2 documents" on Global, a country or a group opens the list of them in its
+// card. It is the Documents table's own Who filter - the same test the count
+// is - so a list and its count can never disagree about what "for Sweden" is.
+
+const COUNTRY_KEY = /^[A-Z]{2}$/;
+
+function docsListId(key) {
+  return `market-docs-${key}`;
+}
+
+function marketLabel(key) {
+  if (key === "global") return t("dashboard.global");
+  if (COUNTRY_KEY.test(key)) return countryName(key);
+  return state.markets.groups.find((g) => g.id === key)?.name || key;
+}
+
+function marketCount(key) {
+  if (key === "global") return state.markets.global_documents || 0;
+  if (COUNTRY_KEY.test(key)) return state.markets.countries.find((c) => c.code === key)?.documents || 0;
+  return state.markets.groups.find((g) => g.id === key)?.documents || 0;
+}
+
+// A list stays open across refreshes until there is nothing left in it: its
+// market was removed, or its last document retagged or deleted.
+function pruneExpanded() {
+  for (const key of [...state.expanded]) {
+    if (!marketCount(key)) {
+      state.expanded.delete(key);
+      state.marketDocs.delete(key);
+    }
+  }
+}
+
+// The count itself is the toggle; with nothing to list it stays plain text.
+function docsToggle(key, n) {
+  const text = t("dashboard.documents", { n });
+  if (!n) return el("span", { class: "muted", text });
+  return el("button", {
+    type: "button",
+    class: "link-btn docs-toggle",
+    text,
+    title: t("dashboard.docsFor", { name: marketLabel(key) }),
+    "aria-expanded": state.expanded.has(key) ? "true" : "false",
+    "aria-controls": docsListId(key),
+    "data-focus-key": `docs:${key}`,
+    onclick: () => toggleMarketDocs(key),
+  });
+}
+
+function docsBox(key) {
+  if (!marketCount(key)) return null;
+  return el(
+    "div",
+    { class: "market-docs", id: docsListId(key), hidden: !state.expanded.has(key) },
+    ...marketDocsContent(key),
+  );
+}
+
+// Only this card changes, so focus stays on the toggle that was pressed.
+function toggleMarketDocs(key) {
+  const open = !state.expanded.has(key);
+  if (open) state.expanded.add(key);
+  else state.expanded.delete(key);
+  document
+    .querySelector(`[data-focus-key="${CSS.escape(`docs:${key}`)}"]`)
+    ?.setAttribute("aria-expanded", open ? "true" : "false");
+  const box = document.getElementById(docsListId(key));
+  if (box) box.hidden = !open;
+  if (open) loadMarketDocs(key);
+}
+
+let marketDocsSeq = 0;
+
+async function loadMarketDocs(key) {
+  const seq = ++marketDocsSeq;
+  const prev = state.marketDocs.get(key);
+  // A refresh leaves the last list on screen; only a first load says so.
+  if (prev?.status === "ok") {
+    state.marketDocs.set(key, { ...prev, seq });
+  } else {
+    state.marketDocs.set(key, { status: "loading", seq });
+    fillMarketDocs(key);
+  }
+  let next;
+  try {
+    const params = new URLSearchParams({ who: key, limit: String(MARKET_LIST_LIMIT) });
+    const data = await api(`/api/documents?${params}`);
+    next = { status: "ok", docs: data?.documents || [], total: data?.total ?? 0, seq };
+  } catch (err) {
+    next = { status: "error", message: err.message, seq };
+  }
+  // A slower, older request must not paint over a newer one, nor bring back
+  // a list that was closed and dropped meanwhile.
+  if (state.marketDocs.get(key)?.seq !== seq) return;
+  state.marketDocs.set(key, next);
+  fillMarketDocs(key);
+}
+
+function fillMarketDocs(key) {
+  const box = document.getElementById(docsListId(key));
+  if (box) keepFocus(() => box.replaceChildren(...marketDocsContent(key)));
+}
+
+function marketDocsContent(key) {
+  if (!state.expanded.has(key)) return [];
+  const entry = state.marketDocs.get(key);
+  if (!entry || entry.status === "loading") {
+    return [el("p", { class: "muted", text: t("dashboard.loadingDocs") })];
+  }
+  if (entry.status === "error") {
+    return [
+      el("p", { class: "muted", text: t("dashboard.loadDocsFailed", { message: entry.message }) }),
+      el("button", {
+        type: "button",
+        class: "btn-link",
+        text: t("dashboard.retry"),
+        onclick: () => loadMarketDocs(key),
+      }),
+    ];
+  }
+  const out = [];
+  if (entry.docs.length) {
+    out.push(
+      el(
+        "ul",
+        { class: "market-docs-list", "aria-label": t("dashboard.docsFor", { name: marketLabel(key) }) },
+        ...entry.docs.map((d) => marketDocRow(key, d)),
+      ),
+    );
+  } else {
+    out.push(el("p", { class: "muted", text: t("dashboard.noDocsHere") }));
+  }
+  if (entry.total > entry.docs.length) {
+    out.push(
+      el("button", {
+        type: "button",
+        class: "btn-link",
+        text: t("dashboard.showAllInDocuments", { n: entry.total }),
+        "data-focus-key": `all:${key}`,
+        onclick: () => showInDocuments(key),
+      }),
+    );
+  }
+  // A country's list is what is limited to it; answers there draw on Global
+  // documents as well, which is easy to forget when looking at the list.
+  if (COUNTRY_KEY.test(key) && state.markets.global_documents) {
+    out.push(
+      el("p", {
+        class: "muted",
+        text: t("dashboard.globalAlsoApplies", { n: state.markets.global_documents, country: countryName(key) }),
+      }),
+    );
+  }
+  return out;
+}
+
+function marketDocRow(key, d) {
+  const name = d.original_filename || d.id;
+  return el(
+    "li",
+    { class: "market-doc" },
+    el("button", {
+      type: "button",
+      class: "link-btn market-doc-name",
+      text: name,
+      title: t("dashboard.openPreview", { name }),
+      "data-focus-key": `doc:${key}:${d.id}`,
+      onclick: () => openPreviewDialog(d, key),
+    }),
+    // Its own markets, so a document in Sweden's list through SE+NO says so.
+    // Every row of the Global list would only say "Global" again.
+    key === "global" ? null : audienceChips(d.audience),
+    isIndexed(d.status) ? null : statusBadge(d),
+    el("a", {
+      class: "btn-link",
+      href: fileUrl(d),
+      text: t("dashboard.download"),
+      "aria-label": t("dashboard.downloadItem", { name }),
+    }),
+  );
 }
 
 async function removeCountry(c) {
@@ -979,31 +1217,34 @@ function clearPreview() {
   els.preview.replaceChildren();
 }
 
+// Shows `doc` in `target`: the file itself for a PDF or JPEG, a note otherwise.
 // The file is fetched once as a blob and shown from that, so a missing original
 // becomes a plain message instead of an error page inside the frame.
-async function loadPreview(doc) {
-  clearPreview();
+// `stillWanted` is asked once the file has arrived, so a slow answer for a
+// document the admin has moved on from is dropped. `adopt` gets the object URL
+// as it goes on screen; its owner revokes it once replaced or closed.
+async function showPreview(doc, target, stillWanted, adopt) {
   const type = (doc.file_type || "").toLowerCase();
   if (type !== "application/pdf" && type !== "image/jpeg") {
-    els.preview.append(el("p", { class: "muted", text: t("dashboard.noPreview") }));
+    target.replaceChildren(el("p", { class: "muted", text: t("dashboard.noPreview") }));
     return;
   }
-  els.preview.append(el("p", { class: "muted", text: t("dashboard.loadingPreview") }));
+  target.replaceChildren(el("p", { class: "muted", text: t("dashboard.loadingPreview") }));
   try {
-    const resp = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/file?inline=true`);
+    const resp = await fetch(`${fileUrl(doc)}?inline=true`);
     if (Shell.bounceIfLoggedOut(resp.status)) return;
     if (!resp.ok) throw new Error(resp.status === 404 ? "missing" : `HTTP ${resp.status}`);
     const blob = await resp.blob();
-    if (state.detail?.id !== doc.id) return;
-    state.previewUrl = URL.createObjectURL(blob);
-    const view =
-      type === "image/jpeg"
-        ? el("img", { src: state.previewUrl, alt: t("dashboard.previewOf", { name: doc.original_filename }) })
-        : el("iframe", { src: state.previewUrl, title: t("dashboard.previewOf", { name: doc.original_filename }) });
-    els.preview.replaceChildren(view);
+    if (!stillWanted()) return;
+    const url = URL.createObjectURL(blob);
+    adopt(url);
+    const label = t("dashboard.previewOf", { name: doc.original_filename });
+    target.replaceChildren(
+      type === "image/jpeg" ? el("img", { src: url, alt: label }) : el("iframe", { src: url, title: label }),
+    );
   } catch (err) {
-    if (state.detail?.id !== doc.id) return;
-    els.preview.replaceChildren(
+    if (!stillWanted()) return;
+    target.replaceChildren(
       el("p", {
         class: "muted",
         text:
@@ -1015,11 +1256,24 @@ async function loadPreview(doc) {
   }
 }
 
+function loadPreview(doc) {
+  clearPreview();
+  return showPreview(
+    doc,
+    els.preview,
+    () => state.detail?.id === doc.id,
+    (url) => {
+      if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
+      state.previewUrl = url;
+    },
+  );
+}
+
 function openDetail(doc) {
   const switching = state.detail?.id !== doc.id;
   refreshDetailMeta(doc);
   els.detailName.textContent = doc.original_filename || doc.id;
-  els.detailDownload.href = `/api/documents/${encodeURIComponent(doc.id)}/file`;
+  els.detailDownload.href = fileUrl(doc);
   els.detail.hidden = false;
   els.docsWrap.classList.add("has-detail");
   if (switching) {
@@ -1043,6 +1297,95 @@ function closeDetail() {
 }
 
 els.detailClose.addEventListener("click", closeDetail);
+
+// --- Preview pop-up (Markets tab) ------------------------------------------------
+// A look at a document from a market's list without leaving the tab. Changing
+// who it is for, or deleting it, stays in the Documents tab's detail panel.
+
+let previewSeq = 0;
+let previewDialogUrl = null;
+
+function openPreviewDialog(doc, key) {
+  const seq = ++previewSeq;
+  state.preview = {
+    doc,
+    key,
+    seq,
+    // A key, not the element: the list may be rebuilt while this is open.
+    opener: document.activeElement?.dataset?.focusKey || null,
+  };
+  els.previewDialogTitle.textContent = doc.original_filename || doc.id;
+  els.previewDialogDownload.href = fileUrl(doc);
+  renderPreviewDialogMeta();
+  if (!els.previewDialog.open) els.previewDialog.showModal();
+  showPreview(
+    doc,
+    els.previewDialogBody,
+    () => state.preview?.seq === seq && els.previewDialog.open,
+    (url) => {
+      if (previewDialogUrl) URL.revokeObjectURL(previewDialogUrl);
+      previewDialogUrl = url;
+    },
+  );
+}
+
+function renderPreviewDialogMeta() {
+  const doc = state.preview?.doc;
+  if (!doc) return;
+  els.previewDialogMeta.replaceChildren(
+    el(
+      "div",
+      { class: "facts" },
+      audienceChips(doc.audience, 6),
+      isIndexed(doc.status) ? null : statusBadge(doc),
+      el("span", { text: t("dashboard.uploadedOn", { date: formatDate(doc.created_at) }) }),
+    ),
+  );
+  els.previewDialogDownload.setAttribute(
+    "aria-label",
+    t("dashboard.downloadItem", { name: doc.original_filename || doc.id }),
+  );
+}
+
+// Also runs for Escape and for showView closing it.
+els.previewDialog.addEventListener("close", () => {
+  previewSeq++;
+  if (previewDialogUrl) URL.revokeObjectURL(previewDialogUrl);
+  previewDialogUrl = null;
+  els.previewDialogBody.replaceChildren();
+  const opener = state.preview?.opener;
+  state.preview = null;
+  if (opener && !els.views.markets.hidden) {
+    document.querySelector(`[data-focus-key="${CSS.escape(opener)}"]`)?.focus();
+  }
+});
+
+els.previewDialogClose.addEventListener("click", () => els.previewDialog.close());
+
+els.previewDialogWho.addEventListener("click", () => {
+  const shown = state.preview;
+  if (!shown) return;
+  els.previewDialog.close();
+  showInDocuments(shown.key, shown.doc);
+});
+
+// The Documents table filtered to what a market's list showed, where its
+// documents can be retagged - with `doc`, if given, open in the detail panel.
+function showInDocuments(key, doc) {
+  clearTimeout(searchTimer);
+  els.search.value = "";
+  state.q = "";
+  els.whoFilter.value = key;
+  // Back to "anyone" if that market has gone since the list was drawn.
+  state.who = els.whoFilter.value;
+  state.offset = 0;
+  state.selected.clear();
+  location.hash = "#documents";
+  showView();
+  window.scrollTo({ top: 0 });
+  loadDocs();
+  if (doc) openDetail(doc);
+}
 
 els.detailSave.addEventListener("click", async () => {
   if (!state.detail || !detailEditor.valid()) return;
@@ -1231,9 +1574,10 @@ async function pumpQueue() {
     next.status = "processing";
     next.file = null;
     renderQueue();
-    // The new document is Global and at the top of the newest-first list.
+    // The new document is Global and at the top of the newest-first list - and
+    // one more for the Markets tab's Global count.
     if (!state.q && !state.who) state.offset = 0;
-    await loadDocs();
+    await Promise.all([loadDocs(), loadMarkets()]);
     // The queue advances when tick() sees this document reach a final status.
   } catch (err) {
     next.status = "failed";
@@ -1375,6 +1719,7 @@ document.addEventListener("langchange", () => {
   dialogEditor.render();
   if (state.detail) refreshDetailMeta(state.detail);
   if (els.groupDialog.open) renderGroupChecklist();
+  if (els.previewDialog.open) renderPreviewDialogMeta();
 });
 
 // --- Start -----------------------------------------------------------------------

@@ -1429,6 +1429,92 @@ input[type="search"] {
   gap: 8px;
 }
 
+/* The documents behind a market's count, opened in its card */
+
+.docs-toggle {
+  color: var(--accent);
+  font-weight: 400;
+  font-size: inherit;
+  white-space: nowrap;
+}
+
+.docs-toggle::after {
+  content: "";
+  display: inline-block;
+  margin: 0 2px 0 5px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  vertical-align: 0.2em;
+  transition: transform 0.15s ease;
+}
+
+.docs-toggle[aria-expanded="true"]::after {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .docs-toggle::after {
+    transition: none;
+  }
+}
+
+.market-docs {
+  flex-basis: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.market-global .market-docs {
+  margin-top: 12px;
+}
+
+.market-docs > p {
+  margin: 0;
+}
+
+.market-docs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  align-self: stretch;
+  border-top: 1px solid var(--panel-border);
+}
+
+.market-doc {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.market-doc-name {
+  flex: 1 1 8em;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-docs .btn-link {
+  text-decoration: none;
+}
+
+.market-doc .btn-link {
+  margin-left: auto;
+}
+
+.market-docs .btn-link:hover {
+  text-decoration: underline;
+}
+
 /* Dialogs */
 
 dialog {
@@ -1460,6 +1546,29 @@ dialog h2 {
 .dialog-actions .btn-secondary {
   padding: 8px 14px;
   font-size: 14px;
+}
+
+.preview-dialog {
+  width: min(860px, calc(100% - 32px));
+}
+
+.preview-dialog .detail-meta {
+  margin: 8px 0 12px 0;
+}
+
+.preview-dialog .dialog-actions {
+  flex-wrap: wrap;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.08);
 }
 
 .group-members {

@@ -377,6 +377,9 @@ async def list_markets() -> dict[str, Any]:
 
     A country's `documents` counts every document limited to it, directly or
     through a group; `direct_documents` and `groups` are what block removing it.
+    The dashboard lists the documents behind each count with list_documents'
+    `who` filter, so these counts must stay the same test as that filter
+    (targets_market_sql, the group id match, is_global_sql).
     """
     async with session_scope() as session:
         countries = (
