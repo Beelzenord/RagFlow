@@ -241,6 +241,27 @@ class VoiceEndpointTests(unittest.TestCase):
             # Same server, same key: only the role differs.
             self.assertIs(client.get("/api/me").json()["voice_enabled"], True)
 
+    def test_me_offers_only_languages_with_their_own_voice(self) -> None:
+        """English and Swedish have voices; the others would be read by the
+        English one, so they are not offered - until a voice is configured."""
+        from app import auth as auth_mod
+
+        with TestClient(self.main.app) as client:
+            # What this machine's settings give; the rule itself is tested below.
+            self.assertEqual(client.get("/api/me").json()["voice_languages"], voice.VOICE_LANGUAGES)
+            self.assertEqual(voice.VOICE_LANGUAGES[0], "en")
+            with mock.patch.object(auth_mod, "is_admin", return_value=False):
+                self.assertEqual(client.get("/api/me").json()["voice_languages"], [])
+
+    def test_a_configured_voice_joins_the_picker(self) -> None:
+        from app import voice
+
+        today = {"en": "default", "sv": "swedish", "nb": "default", "fi": "default", "da": "default"}
+        self.assertEqual(voice.voice_languages(today, "default"), ["en", "sv"])
+        self.assertEqual(
+            voice.voice_languages({**today, "nb": "norwegian"}, "default"), ["en", "sv", "nb"]
+        )
+
     def test_the_dead_endpoints_are_gone(self) -> None:
         paths = {r.path for r in self.main.app.routes if hasattr(r, "path")}
         self.assertNotIn("/api/voice/tts", paths)

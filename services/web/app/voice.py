@@ -61,6 +61,18 @@ ELEVENLABS_VOICES: dict[str, str] = {
     "da": ELEVENLABS_VOICE_ID_DA,
 }
 
+# What the chat's voice picker offers: the languages with a voice of their own.
+# One that would fall back to the default voice is left out rather than offered
+# and then read in that voice's accent. Setting ELEVENLABS_VOICE_ID_NB (or _FI,
+# _DA) adds it, with no change here.
+def voice_languages(voices: dict[str, str] | None = None, default: str | None = None) -> list[str]:
+    voices = ELEVENLABS_VOICES if voices is None else voices
+    default = ELEVENLABS_VOICE_ID if default is None else default
+    return [lang for lang, voice_id in voices.items() if lang == "en" or voice_id != default]
+
+
+VOICE_LANGUAGES = voice_languages()
+
 # The interface says "nb" because its dictionary is Bokmål; ElevenLabs knows the
 # language as plain Norwegian.
 _ELEVENLABS_CODES = {"nb": "no"}

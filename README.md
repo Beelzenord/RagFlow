@@ -283,9 +283,11 @@ without a reload, so a conversation on screen is kept.
   cost nothing.
 - **Answers** follow the language of the question, as before; the interface
   language doesn't change them.
-- **Voice** follows the interface language unless an admin picks another in
-  its own dropdown. Norwegian, Finnish and Danish use the default ElevenLabs
-  voice unless `ELEVENLABS_VOICE_ID_NB`, `_FI` or `_DA` is set.
+- **Voice** offers only the languages with a voice of their own: English, and
+  Swedish (`ELEVENLABS_VOICE_ID_SV`). Setting `ELEVENLABS_VOICE_ID_NB`, `_FI` or
+  `_DA` adds that language to the dropdown, with no code change. The dropdown
+  follows the interface language when it has a voice, and is otherwise English,
+  until an admin picks one; with a single language there is no dropdown.
 - **What readers are sent:** `GET /strings.js` (`static/lang.js` is the engine)
   serves the dictionaries. A reader's copy leaves out the Dashboard's wording,
   so the Dashboard still doesn't exist from where they sit.

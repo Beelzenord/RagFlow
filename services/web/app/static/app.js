@@ -15,6 +15,10 @@ const VOICE_LANG_KEY = "rag.voiceLang.v1";
 // Enough of a cushion to absorb a network hiccup between chunks without being
 // audible as a delay before the answer starts.
 const AUDIO_LEAD_SECONDS = 0.06;
+// The empty chat box's rolling greeting: where its round has got to, so the
+// next visit carries on, and how long each line stays.
+const GREETINGS_KEY = "rag.greetings.v1";
+const GREETING_MS = 7000;
 
 const state = {
   turns: [],
@@ -35,6 +39,10 @@ const state = {
   streaming: false,
   // Set while an answer is in flight so the send button can cancel it.
   abort: null,
+  // The line on the empty box, the timer for the next, and where the round is.
+  // `started` stays false if greetings.js is missing - the plain placeholder
+  // then remains.
+  greeting: { started: false, key: null, timer: null, first: true, saved: null },
 };
 
 // Voice keeps its own state so nothing in the written path can be disturbed by
@@ -69,6 +77,7 @@ const els = {
   chatLog: document.getElementById("chat-log"),
   chatForm: document.getElementById("chat-form"),
   questionInput: document.getElementById("question-input"),
+  composerRoll: document.getElementById("composer-roll"),
   askBtn: document.getElementById("ask-btn"),
   newChatBtn: document.getElementById("new-chat-btn"),
   voiceControls: document.getElementById("voice-controls"),
@@ -283,7 +292,7 @@ async function initSession() {
   }
   // Without an ElevenLabs key every voice request would 503, so the control is
   // withheld rather than offered and then refused.
-  if (info.voice_enabled === true) initVoice();
+  if (info.voice_enabled === true) initVoice(info.voice_languages);
 }
 
 initSession();
@@ -295,6 +304,8 @@ document.addEventListener("langchange", () => {
   if (state.canWrite) renderDocumentPicker();
   updateSendBtn();
   followUiLanguageForVoice();
+  // The same line, in the new language - no roll, nothing new drawn.
+  if (state.greeting.key) showGreeting(state.greeting.key, { animate: false });
 });
 
 async function readNdjson(resp, onEvent) {
@@ -437,6 +448,7 @@ function resetChat() {
   state.turns = [];
   cancelVoiceTurn();
   els.chatLog.innerHTML = "";
+  if (state.greeting.started) showGreeting(drawGreeting());
   updateNewChatBtn();
   autoGrowInput();
   updateSendBtn();
@@ -498,8 +510,125 @@ function updateSendBtn() {
   els.askBtn.disabled = !busy && !els.questionInput.value.trim();
   els.askBtn.setAttribute("aria-label", Lang.t(busy ? "chat.stop" : "chat.send"));
   updateMicBtn();
+  // Every change to what is typed, and to streaming, comes through here.
+  syncGreeting();
 }
 
+// --- Composer greetings ----------------------------------------------------------
+// Over the empty box, a short line that rolls up to make way for the next every
+// few seconds (static/greetings.js picks them). Decoration only: the box's name
+// for screen readers is the fixed chat.inputLabel, and the overlay is
+// aria-hidden. It rolls only while nothing is typed, nothing is streaming and
+// the tab is in view; focus does not stop it, since the box keeps focus after
+// every send.
+
+function loadGreetings() {
+  try {
+    return JSON.parse(localStorage.getItem(GREETINGS_KEY) || "null");
+  } catch {
+    return null;
+  }
+}
+
+// The next line, its place in the round kept in memory and, where it can be,
+// in storage for the next visit.
+function drawGreeting() {
+  const g = state.greeting;
+  const { key, saved } = Greetings.next(g.saved, new Date(), { first: g.first });
+  g.first = false;
+  g.saved = saved;
+  try {
+    localStorage.setItem(GREETINGS_KEY, JSON.stringify(saved));
+  } catch {
+    /* the round lasts for this page only */
+  }
+  return key;
+}
+
+// Swaps the line: the old one rolls up and away as the new one rolls in from
+// below (a plain crossfade under reduced motion, see styles.css).
+function showGreeting(key, { animate = true } = {}) {
+  state.greeting.key = key;
+  const box = els.composerRoll;
+  const line = document.createElement("span");
+  line.className = "roll-line";
+  line.textContent = Lang.t(key);
+  if (animate) {
+    for (const old of box.querySelectorAll(".roll-line:not(.is-leaving)")) {
+      old.classList.add("is-leaving");
+      const drop = () => old.remove();
+      old.addEventListener("animationend", drop, { once: true });
+      // animationend never comes for a hidden overlay or a background tab.
+      setTimeout(drop, 900);
+    }
+    line.classList.add("is-entering");
+    line.addEventListener("animationend", () => line.classList.remove("is-entering"), { once: true });
+    box.append(line);
+  } else {
+    box.replaceChildren(line);
+  }
+  fitGreeting(line);
+}
+
+// A line too long for a narrow box first gets a slightly smaller size, down to
+// 12px, and only then an ellipsis.
+function fitGreeting(line) {
+  line.style.fontSize = "";
+  if (!line.clientWidth || line.scrollWidth <= line.clientWidth) return;
+  const base = parseFloat(getComputedStyle(line).fontSize) || 14;
+  // Text does not scale quite linearly with its size, so the estimate is
+  // checked and stepped down until the line really fits.
+  let size = Math.max(12, Math.floor(base * (line.clientWidth / line.scrollWidth) * 10) / 10);
+  line.style.fontSize = `${size}px`;
+  while (size > 12 && line.scrollWidth > line.clientWidth) {
+    size = Math.max(12, size - 0.2);
+    line.style.fontSize = `${size}px`;
+  }
+}
+
+function greetingIdle() {
+  return !els.questionInput.value && !state.streaming && !document.hidden;
+}
+
+function refitGreeting() {
+  const line = els.composerRoll?.querySelector(".roll-line:not(.is-leaving)");
+  if (line) fitGreeting(line);
+}
+
+function syncGreeting() {
+  const g = state.greeting;
+  if (!g.started) return;
+  const wasHidden = els.composerRoll.hidden;
+  els.composerRoll.hidden = Boolean(els.questionInput.value);
+  // A hidden line has no width, so one drawn while text was typed fits now.
+  if (wasHidden && !els.composerRoll.hidden) refitGreeting();
+  clearTimeout(g.timer);
+  g.timer = null;
+  if (!greetingIdle()) return;
+  g.timer = setTimeout(() => {
+    if (greetingIdle()) showGreeting(drawGreeting());
+    syncGreeting();
+  }, GREETING_MS);
+}
+
+function startGreetings() {
+  if (!els.composerRoll || !window.Greetings) return;
+  // The native placeholder (and the attribute Lang.apply would refill it from)
+  // gives way to the overlay; without this script it simply stays.
+  els.questionInput.placeholder = "";
+  els.questionInput.removeAttribute("data-i18n-placeholder");
+  state.greeting.saved = loadGreetings();
+  state.greeting.started = true;
+  els.composerRoll.hidden = Boolean(els.questionInput.value);
+  showGreeting(drawGreeting());
+  syncGreeting();
+}
+
+document.addEventListener("visibilitychange", syncGreeting);
+// A box that changes width (a phone turned, the window resized) refits its line.
+window.addEventListener("resize", refitGreeting);
+
+startGreetings();
 updateSendBtn();
 
 function appendMessage(role, text) {
@@ -614,16 +743,17 @@ function renderCitations(list) {
 // touched: this shares the renderers and state.turns, and nothing else.
 // ---------------------------------------------------------------------------
 
-function initVoice() {
+function initVoice(languages) {
   if (!els.micBtn || !els.voiceControls) return;
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
     return;
   }
   els.voiceControls.hidden = false;
+  renderVoiceLanguages(languages);
 
   // A voice language picked here sticks; until then it follows the interface.
   const saved = savedVoiceLanguage();
-  if (els.voiceLang) els.voiceLang.value = saved || Lang.current;
+  if (els.voiceLang) els.voiceLang.value = saved || defaultVoiceLanguage();
   els.voiceLang?.addEventListener("change", () => {
     try {
       localStorage.setItem(VOICE_LANG_KEY, els.voiceLang.value);
@@ -639,6 +769,27 @@ function initVoice() {
   });
 }
 
+// Only the languages the server has a voice of its own for (VOICE_LANGUAGES in
+// voice.py) - offering one it would read in another language's voice would be
+// a promise it cannot keep. Each is named in itself, as the interface picker
+// names it. With a single language there is nothing to choose, so no picker.
+function renderVoiceLanguages(languages) {
+  if (!els.voiceLang) return;
+  const offered = (Array.isArray(languages) ? languages : []).filter((code) => Lang.supported.includes(code));
+  // An older server that does not say keeps the options in the page.
+  if (!offered.length) return;
+  els.voiceLang.replaceChildren(...offered.map((code) => new Option(Lang.names[code] || code, code)));
+  els.voiceLang.hidden = offered.length < 2;
+}
+
+// The interface's language when it has a voice; otherwise English, which
+// always does.
+function defaultVoiceLanguage() {
+  const offered = [...(els.voiceLang?.options || [])].map((o) => o.value);
+  if (offered.includes(Lang.current)) return Lang.current;
+  return offered.includes("en") ? "en" : offered[0] || "en";
+}
+
 function savedVoiceLanguage() {
   try {
     const saved = localStorage.getItem(VOICE_LANG_KEY);
@@ -649,7 +800,7 @@ function savedVoiceLanguage() {
 }
 
 function followUiLanguageForVoice() {
-  if (els.voiceLang && !savedVoiceLanguage()) els.voiceLang.value = Lang.current;
+  if (els.voiceLang && !savedVoiceLanguage()) els.voiceLang.value = defaultVoiceLanguage();
   updateMicBtn();
   setVoiceStatus("");
 }

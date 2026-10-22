@@ -103,6 +103,8 @@ async def api_me(request: Request) -> JSONResponse:
             # would answer 503 (not configured) or 403 (not an admin). Advisory
             # only - require_voice on the endpoint is what actually enforces it.
             "voice_enabled": voice.enabled() and auth.is_admin(request),
+            # The voice picker's options; empty whenever the microphone is hidden.
+            "voice_languages": voice.VOICE_LANGUAGES if voice.enabled() and auth.is_admin(request) else [],
         }
     )
 

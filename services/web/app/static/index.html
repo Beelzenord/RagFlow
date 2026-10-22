@@ -77,18 +77,22 @@
             </svg>
           </button>
           <select id="voice-lang" aria-label="Voice language" data-i18n-aria-label="voice.language">
+            <!-- Rebuilt by app.js from /api/me: the languages with a voice of their own. -->
             <option value="en">English</option>
             <option value="sv">Svenska</option>
-            <option value="nb">Norsk</option>
-            <option value="fi">Suomi</option>
-            <option value="da">Dansk</option>
           </select>
           <span id="voice-status" class="voice-status" role="status" aria-live="polite"></span>
         </div>
       </div>
       <div id="chat-log" class="chat-log" aria-live="polite"></div>
       <form id="chat-form" class="chat-form">
-        <textarea id="question-input" rows="1" placeholder="What can I help you with?" data-i18n-placeholder="chat.placeholder"></textarea>
+        <div class="composer-field">
+          <textarea id="question-input" rows="1" placeholder="What can I help you with?"
+                    data-i18n-placeholder="chat.placeholder"
+                    aria-label="Ask a question" data-i18n-aria-label="chat.inputLabel"></textarea>
+          <!-- The rolling greeting app.js puts over the empty box; decoration only. -->
+          <div class="composer-roll" id="composer-roll" aria-hidden="true" hidden></div>
+        </div>
         <button type="submit" id="ask-btn" class="send-btn" aria-label="Send">
           <svg class="icon-send" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 5v14M12 5l-6 6M12 5l6 6" fill="none" stroke="currentColor"
@@ -104,6 +108,7 @@
   </main>
 
   <script src="/shell.js"></script>
+  <script src="/greetings.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
