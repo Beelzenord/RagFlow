@@ -32,6 +32,45 @@
     return "en";
   }
 
+  // The countries named in language tags, in preference order: ["en-US",
+  // "sv-SE"] gives ["US", "SE"]. Only an explicit region counts - "sv" alone is
+  // spoken in Sweden and Finland, so it names no country, and maximize() would
+  // invent one. Regions that are not two-letter countries ("es-419") are skipped.
+  function regionsOf(list) {
+    const out = [];
+    for (const raw of list || []) {
+      const tag = String(raw || "").trim().replace(/_/g, "-");
+      let region = "";
+      try {
+        region = new Intl.Locale(tag).region || "";
+      } catch {
+        const m = /^[a-z]{2,3}(?:-[a-z]{4})?-([a-z]{2}|\d{3})(?:-|$)/i.exec(tag);
+        region = m ? m[1] : "";
+      }
+      region = region.toUpperCase();
+      if (/^[A-Z]{2}$/.test(region) && !out.includes(region)) out.push(region);
+    }
+    return out;
+  }
+
+  // The same regions, ordered for guessing where someone is. English is picked
+  // as an interface language the world over - en-US is simply what an English
+  // install defaults to - so a region carried by English says little about
+  // location. A region carried by any other language (sv-SE) is the stronger
+  // signal: those come first, then English ones, each in preference order.
+  // So ["en-US", "sv-SE"] gives ["SE", "US"], while ["en-US"] still gives ["US"].
+  function rankedRegions(list) {
+    const strong = [];
+    const weak = [];
+    for (const raw of list || []) {
+      const tag = String(raw || "").trim().replace(/_/g, "-");
+      const region = regionsOf([tag])[0];
+      if (!region) continue;
+      (tag.toLowerCase().split("-")[0] === "en" ? weak : strong).push(region);
+    }
+    return [...new Set([...strong, ...weak])];
+  }
+
   function stored() {
     try {
       const value = localStorage.getItem(KEY);
@@ -156,6 +195,11 @@
       return current;
     },
     pick,
+    regionsOf,
+    rankedRegions,
+    // Language settings, not location: the time zone would be the obvious
+    // signal, but Windows reports Europe/Berlin for most of western Europe.
+    browserRegions: () => rankedRegions(browserLanguages()),
     t,
     apply,
     region,

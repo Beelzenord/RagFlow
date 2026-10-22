@@ -13,6 +13,7 @@
   "chat.hint": "Hvordan kan vi hjelpe? Bare spør.",
   "chat.answersFor": "Svar for",
   "chat.allMarkets": "Alle markeder",
+  "chat.marketGuessed": "Valgt ut fra nettleserens språkinnstillinger - du kan velge et annet når som helst",
   "chat.searchIn": "Søk i",
   "chat.allDocuments": "Alle dokumenter",
   "chat.showSources": "Vis kildedetaljer",

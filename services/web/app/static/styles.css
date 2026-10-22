@@ -572,6 +572,15 @@ button:disabled {
   filter: brightness(1.05);
 }
 
+/* Which market a cited document applies to; absent for documents for everyone. */
+.source-doc-market {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
 .citations {
   margin-top: 8px;
   padding-top: 8px;

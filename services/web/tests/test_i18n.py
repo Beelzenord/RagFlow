@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -106,6 +108,69 @@ class DictionaryTests(unittest.TestCase):
             same = [k for k, v in self.en.items() if entries[k] == v]
             with self.subTest(lang=lang):
                 self.assertLess(len(same), len(self.en) * 0.1, same)
+
+
+# Runs static/lang.js in Node with just enough of a browser around it, then
+# prints Lang.regionsOf for each case. No npm packages: only Node's vm module.
+REGIONS_SCRIPT = r"""
+const fs = require("fs"), vm = require("vm");
+const ctx = {
+  window: {},
+  navigator: { languages: ["en-US"] },
+  localStorage: { getItem: () => null, setItem() {} },
+  document: { documentElement: { classList: { add() {}, remove() {} } }, addEventListener() {} },
+  CustomEvent: function () {},
+  Intl,
+};
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const cases = JSON.parse(process.argv[2]);
+const fn = ctx.window.Lang[process.argv[3]];
+console.log(JSON.stringify(cases.map((c) => fn(c))));
+"""
+
+
+@unittest.skipUnless(shutil.which("node"), "needs node")
+class RegionsOfTests(unittest.TestCase):
+    """Where "Answers for" starts comes from these regions, so their edge cases
+    decide whether a Swede starts on Sweden."""
+
+    CASES = {
+        "first region in preference order": (["en-US", "sv-SE"], ["US", "SE"]),
+        "a language alone names no country": (["sv"], []),
+        "script subtags are skipped": (["zh-Hant-TW"], ["TW"]),
+        "numeric UN regions are not countries": (["es-419"], []),
+        "case and underscores are tolerated": (["nb-no", "da_DK"], ["NO", "DK"]),
+        "duplicates collapse": (["sv-SE", "en-SE", "sv"], ["SE"]),
+        "rubbish is ignored": (["", "x", "not a tag", None], []),
+    }
+
+    # Seen in testing: a Swede's browser listing en-US first started them on the
+    # United States once the US was a market. English regions rank last.
+    RANKED = {
+        "a non-English region beats an English one": (["en-US", "sv-SE"], ["SE", "US"]),
+        "English alone still counts": (["en-US"], ["US"]),
+        "a Briton stays British": (["en-GB", "en"], ["GB"]),
+        "browser order holds within each tier": (["en-US", "de-DE", "en-GB", "nb-NO"], ["DE", "NO", "US", "GB"]),
+        "a region-less language adds nothing": (["en-US", "sv"], ["US"]),
+    }
+
+    def run_lang(self, function: str, cases: dict) -> None:
+        inputs = [case[0] for case in cases.values()]
+        out = subprocess.run(
+            ["node", "-e", REGIONS_SCRIPT, str(APP_DIR / "static" / "lang.js"), json.dumps(inputs), function],
+            capture_output=True, text=True, timeout=30, check=True,
+        ).stdout
+        results = json.loads(out.strip().splitlines()[-1])
+        for (name, (_, expected)), got in zip(cases.items(), results):
+            with self.subTest(name):
+                self.assertEqual(got, expected)
+
+    def test_regions_of(self) -> None:
+        self.run_lang("regionsOf", self.CASES)
+
+    def test_ranked_regions(self) -> None:
+        self.run_lang("rankedRegions", self.RANKED)
 
 
 @unittest.skipUnless(HTTP_DEPS, "needs fastapi and httpx")

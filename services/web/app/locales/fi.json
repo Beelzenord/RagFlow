@@ -13,6 +13,7 @@
   "chat.hint": "Miten voimme auttaa? Kysy vain.",
   "chat.answersFor": "Markkina",
   "chat.allMarkets": "Kaikki markkinat",
+  "chat.marketGuessed": "Valittu selaimen kieliasetusten perusteella - voit vaihtaa sen milloin tahansa",
   "chat.searchIn": "Haku",
   "chat.allDocuments": "Kaikki asiakirjat",
   "chat.showSources": "Näytä lähteiden tiedot",
