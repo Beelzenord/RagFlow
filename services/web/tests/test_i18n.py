@@ -99,6 +99,15 @@ class DictionaryTests(unittest.TestCase):
                 with self.subTest(script=script.name, key=key):
                     self.assertIn(key, self.en)
 
+    def test_greetings_fit_the_chat_box(self) -> None:
+        # One line over the empty box: about 44 characters still fit a phone
+        # at a slightly smaller size, instead of ending in "...".
+        for lang, entries in self.locales.items():
+            for key, value in entries.items():
+                if key == "chat.placeholder" or key.startswith("chat.line"):
+                    with self.subTest(lang=lang, key=key):
+                        self.assertLessEqual(len(value), 44, value)
+
     def test_every_dashboard_key_is_used(self) -> None:
         # The other way round: wording the Dashboard no longer shows would
         # otherwise linger in five languages, and be translated again for nothing.
