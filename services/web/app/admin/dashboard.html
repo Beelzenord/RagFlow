@@ -142,6 +142,7 @@
           <span data-i18n="dashboard.globalText">Everyone, in every market. Documents not limited to any market.</span>
           <span class="muted" id="global-count"></span>
         </p>
+        <div class="market-docs" id="market-docs-global" hidden></div>
       </div>
 
       <div class="dash-markets">
@@ -201,6 +202,19 @@
     <div class="dialog-actions">
       <button type="button" class="btn-secondary" id="group-dialog-cancel" data-i18n="dashboard.cancel">Cancel</button>
       <button type="button" id="group-dialog-save" data-i18n="dashboard.save">Save</button>
+    </div>
+  </dialog>
+
+  <dialog id="preview-dialog" class="preview-dialog" aria-labelledby="preview-dialog-title">
+    <div class="detail-head">
+      <h2 id="preview-dialog-title"></h2>
+      <button type="button" id="preview-dialog-close" class="btn-icon" aria-label="Close preview" data-i18n-aria-label="dashboard.closePreview">&times;</button>
+    </div>
+    <div class="detail-meta" id="preview-dialog-meta"></div>
+    <div class="preview" id="preview-dialog-body"></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn-secondary" id="preview-dialog-who" data-i18n="dashboard.changeWho">Change who it's for</button>
+      <a id="preview-dialog-download" class="btn-like btn-primary" href="#" data-i18n="dashboard.download">Download</a>
     </div>
   </dialog>
 
