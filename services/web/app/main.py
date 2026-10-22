@@ -224,6 +224,8 @@ async def api_documents(
     user_id: str | None = None,
     q: str | None = None,
     who: str | None = None,
+    include_global: bool | None = None,
+    sort: str | None = None,
     limit: int | None = None,
     offset: int | None = None,
 ) -> JSONResponse:
@@ -241,6 +243,10 @@ async def api_documents(
         params["q"] = q
     if who:
         params["who"] = who
+    if include_global:
+        params["include_global"] = "true"
+    if sort:
+        params["sort"] = sort
     if limit is not None:
         params["limit"] = limit
     if offset is not None:
@@ -443,6 +449,13 @@ async def dashboard_script(request: Request) -> Any:
     if not auth.is_admin(request):
         raise HTTPException(404, "Not Found")
     return FileResponse(ADMIN_DIR / "dashboard.js", media_type="text/javascript", headers=NO_CACHE)
+
+
+@app.get("/dashboard/dashboard.css")
+async def dashboard_styles(request: Request) -> Any:
+    if not auth.is_admin(request):
+        raise HTTPException(404, "Not Found")
+    return FileResponse(ADMIN_DIR / "dashboard.css", media_type="text/css", headers=NO_CACHE)
 
 
 # --- Interface languages ----------------------------------------------------------

@@ -1,65 +1,87 @@
-// Dashboard - upload documents, decide who each is for, and manage markets.
+// Dashboard - the document library: every document, who each one is for, and
+// the markets (countries and groups) that decide it.
 //
 // Served only to admins (see /dashboard in main.py); every endpoint it calls
 // checks the role again. All server text is rendered with textContent, and all
 // of the page's own words come from Lang.t (static/lang.js, app/locales).
+//
+// The sidebar lists the markets like folders. Picking one is the hash route
+// (#all, #global, #group/<id>, #country/SE, #country/SE/sees), so Back walks
+// through them; dropping documents on one makes them for it.
 
 const PAGE_SIZE = 25;
 const TICK_MS = 3000;
-// Rows in a market's own list on the Markets tab; the rest are a click away in
-// the Documents table.
-const MARKET_LIST_LIMIT = 10;
+const SORT_KEY = "rag.dash.sort.v1";
+// The orders ingestion accepts (SORTS in services/ingestion/app/audience.py).
+const SORTS = ["uploaded_desc", "uploaded_asc", "name_asc", "name_desc"];
+const COUNTRY_KEY = /^[A-Z]{2}$/;
+const GROUP_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// What a dragged row carries, so a drop can tell documents from files dragged
+// in from the desktop - those are uploads.
+const DRAG_TYPE = "application/x-rag-documents";
 
 const state = {
-  markets: { countries: [], groups: [], global_documents: 0 },
+  markets: { countries: [], groups: [], global_documents: 0, total_documents: 0 },
+  marketsLoaded: false,
   catalogue: null,
+  view: { kind: "all" },
   docs: [],
+  docsLoaded: false,
   total: 0,
   offset: 0,
   q: "",
-  who: "",
+  sort: "uploaded_desc",
   selected: new Set(),
+  // The row the keyboard is on, as an index into state.docs.
+  active: -1,
   detail: null,
   previewUrl: null,
-  // The Markets tab's open document lists, keyed as the Who filter is
-  // ("global", a country code, a group id), and what each last showed.
-  expanded: new Set(),
-  marketDocs: new Map(),
-  // The document in the preview pop-up, while it is open.
-  preview: null,
   queue: [],
   queueBusy: false,
   nextQid: 1,
   tickHandle: null,
+  trayOpen: true,
 };
 
 const $ = (id) => document.getElementById(id);
 
 const els = {
-  status: $("dash-status"),
-  tabs: { documents: $("tab-documents"), markets: $("tab-markets") },
-  views: { documents: $("view-documents"), markets: $("view-markets") },
-  uploadBtn: $("upload-btn"),
-  fileInput: $("file-input"),
-  collectionInput: $("collection-input"),
-  queue: $("queue"),
-  queueSummary: $("queue-summary"),
-  queueList: $("queue-list"),
-  queueClearBtn: $("queue-clear-btn"),
-  docsWrap: $("dash-docs"),
+  rail: $("rail"),
+  railClose: $("rail-close"),
+  railScrim: $("rail-scrim"),
+  railTop: $("rail-top"),
+  railGroups: $("rail-groups"),
+  railCountries: $("rail-countries"),
+  newGroupBtn: $("new-group-btn"),
+  addCountryBtn: $("add-country-btn"),
+  libMain: $("lib-main"),
+  railOpen: $("rail-open"),
+  viewIcon: $("view-icon"),
+  viewName: $("view-name"),
+  viewCode: $("view-code"),
+  viewCount: $("view-count"),
+  viewActions: $("view-actions"),
+  viewSub: $("view-sub"),
+  searchIcon: $("search-icon"),
   search: $("doc-search"),
-  whoFilter: $("who-filter"),
-  bulkBar: $("bulk-bar"),
-  bulkCount: $("bulk-count"),
-  bulkAudienceBtn: $("bulk-audience-btn"),
-  bulkDeleteBtn: $("bulk-delete-btn"),
-  bulkClearBtn: $("bulk-clear-btn"),
+  uploadBtn: $("upload-btn"),
+  uploadIcon: $("upload-icon"),
+  uploadOptionsBtn: $("upload-options-btn"),
+  uploadOptions: $("upload-options"),
+  collectionInput: $("collection-input"),
+  fileInput: $("file-input"),
+  tableWrap: $("table-wrap"),
   selectAll: $("select-all"),
+  thName: $("th-name"),
+  thDate: $("th-date"),
   rows: $("doc-rows"),
   docsEmpty: $("docs-empty"),
+  pageInfo: $("page-info"),
   prev: $("prev-page"),
   next: $("next-page"),
-  pageInfo: $("page-info"),
+  shortcutsBtn: $("shortcuts-btn"),
+  dropzone: $("dropzone"),
+  dropzoneIcon: $("dropzone-icon"),
   detail: $("detail"),
   detailName: $("detail-name"),
   detailClose: $("detail-close"),
@@ -70,14 +92,19 @@ const els = {
   detailSave: $("detail-save"),
   detailDownload: $("detail-download"),
   detailDelete: $("detail-delete"),
-  globalCount: $("global-count"),
-  globalDocs: $("market-docs-global"),
-  countriesSummary: $("countries-summary"),
-  countryList: $("country-list"),
-  countrySearch: $("country-search"),
-  countryResults: $("country-results"),
-  groupList: $("group-list"),
-  newGroupBtn: $("new-group-btn"),
+  bulkBar: $("bulk-bar"),
+  bulkCount: $("bulk-count"),
+  bulkAudienceBtn: $("bulk-audience-btn"),
+  bulkDeleteBtn: $("bulk-delete-btn"),
+  bulkClearBtn: $("bulk-clear-btn"),
+  queue: $("queue"),
+  trayIcon: $("tray-icon"),
+  queueSummary: $("queue-summary"),
+  queueToggle: $("queue-toggle"),
+  queueBody: $("queue-body"),
+  queueList: $("queue-list"),
+  queueClearBtn: $("queue-clear-btn"),
+  toasts: $("toasts"),
   audienceDialog: $("audience-dialog"),
   audienceDialogTitle: $("audience-dialog-title"),
   dialogEditor: $("dialog-editor"),
@@ -93,13 +120,17 @@ const els = {
   groupDialogStatus: $("group-dialog-status"),
   groupDialogCancel: $("group-dialog-cancel"),
   groupDialogSave: $("group-dialog-save"),
-  previewDialog: $("preview-dialog"),
-  previewDialogTitle: $("preview-dialog-title"),
-  previewDialogClose: $("preview-dialog-close"),
-  previewDialogMeta: $("preview-dialog-meta"),
-  previewDialogBody: $("preview-dialog-body"),
-  previewDialogWho: $("preview-dialog-who"),
-  previewDialogDownload: $("preview-dialog-download"),
+  countryDialog: $("country-dialog"),
+  countrySearch: $("country-search"),
+  countryResults: $("country-results"),
+  countryDialogClose: $("country-dialog-close"),
+  confirmDialog: $("confirm-dialog"),
+  confirmTitle: $("confirm-title"),
+  confirmBody: $("confirm-body"),
+  confirmOk: $("confirm-ok"),
+  confirmCancel: $("confirm-cancel"),
+  shortcutsDialog: $("shortcuts-dialog"),
+  shortcutsClose: $("shortcuts-close"),
 };
 
 // --- Small helpers -------------------------------------------------------------
@@ -127,17 +158,13 @@ const t = (key, vars) => Lang.t(key, vars);
 function fold(s) {
   return String(s || "")
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[̀-ͯ]/g, "")
     .toLowerCase();
 }
 
 function setStatus(node, text, kind) {
   node.textContent = text || "";
   node.className = `status ${kind || ""}`.trim();
-}
-
-function flash(text, kind = "ok") {
-  setStatus(els.status, text, kind);
 }
 
 function errorText(data, status) {
@@ -214,19 +241,6 @@ function formatDate(iso) {
   return Lang.date(iso);
 }
 
-// The stored original, as uploaded. A download unless ?inline=true is added.
-function fileUrl(doc) {
-  return `/api/documents/${encodeURIComponent(doc.id)}/file`;
-}
-
-// Rebuilding part of the page drops keyboard focus; this puts it back on the
-// control with the same data-focus-key, when that control is still there.
-function keepFocus(rebuild) {
-  const key = document.activeElement?.dataset?.focusKey;
-  rebuild();
-  if (key) document.querySelector(`[data-focus-key="${CSS.escape(key)}"]`)?.focus();
-}
-
 function formatBytes(n) {
   if (!Number.isFinite(n) || n <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
@@ -237,6 +251,23 @@ function formatBytes(n) {
     i++;
   }
   return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+// The stored original, as uploaded. A download unless ?inline=true is added.
+function fileUrl(doc) {
+  return `/api/documents/${encodeURIComponent(doc.id)}/file`;
+}
+
+function isImage(doc) {
+  return (doc.file_type || "").toLowerCase().startsWith("image/");
+}
+
+// Rebuilding part of the page drops keyboard focus; this puts it back on the
+// control with the same data-focus-key, when that control is still there.
+function keepFocus(rebuild) {
+  const key = document.activeElement?.dataset?.focusKey;
+  rebuild();
+  if (key) document.querySelector(`[data-focus-key="${CSS.escape(key)}"]`)?.focus();
 }
 
 // In the admin's language ("Sverige", "Ruotsi"), from the browser's own country
@@ -250,10 +281,86 @@ function sortedCountries() {
   return [...state.markets.countries].sort((a, b) => Lang.compare(countryName(a.code), countryName(b.code)));
 }
 
+// --- Icons and flags -------------------------------------------------------------
+// Line icons drawn in currentColor. The markup is constant - never user text.
+
+const ICONS = {
+  all: '<path d="M12 3 3 8l9 5 9-5-9-5Z"/><path d="m3 13 9 5 9-5"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/>',
+  group: '<circle cx="8.5" cy="9" r="3"/><circle cx="16" cy="10" r="2.5"/><path d="M3 19c.8-3 2.9-4.6 5.5-4.6S13.2 16 14 19"/><path d="M14.5 14.6c.5-.2 1-.3 1.5-.3 2 0 3.6 1.3 4.3 3.9"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>',
+  image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>',
+  download: '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
+  upload: '<path d="M12 20V9"/><path d="m7 14 5-5 5 5"/><path d="M5 4h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  more: '<circle cx="5" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="19" cy="12" r="1.4" fill="currentColor"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+  trash: '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
+};
+
+function icon(name, cls = "icon") {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("class", cls);
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.innerHTML = ICONS[name] || "";
+  return svg;
+}
+
+function flagEmoji(code) {
+  return String.fromCodePoint(...[...code].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65));
+}
+
+// Windows draws a flag emoji as two letters, so whether this browser can show
+// flags is tested once: drawn in colour, a flag has coloured pixels.
+let flagSupport = null;
+
+function flagsSupported() {
+  if (flagSupport !== null) return flagSupport;
+  flagSupport = false;
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = 20;
+    canvas.height = 20;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.textBaseline = "top";
+    ctx.font = "16px sans-serif";
+    ctx.fillText(flagEmoji("SE"), 0, 0);
+    const px = ctx.getImageData(0, 0, 20, 20).data;
+    for (let i = 0; i < px.length; i += 4) {
+      const [r, g, b, a] = [px[i], px[i + 1], px[i + 2], px[i + 3]];
+      if (a > 100 && Math.max(r, g, b) - Math.min(r, g, b) > 60) {
+        flagSupport = true;
+        break;
+      }
+    }
+  } catch {
+    /* letters it is */
+  }
+  return flagSupport;
+}
+
+function flagNode(code) {
+  return flagsSupported()
+    ? el("span", { class: "flag", "aria-hidden": "true", text: flagEmoji(code) })
+    : el("span", { class: "flag flag-code", "aria-hidden": "true", text: code });
+}
+
+// The mark beside a market's name: its flag, or an icon.
+function viewMark(view) {
+  if (view.kind === "country") return flagNode(view.key);
+  return icon(view.kind === "global" ? "globe" : view.kind === "group" ? "group" : "all");
+}
+
 // --- Who it's for: chips ---------------------------------------------------------
 
 function globalChip() {
-  return el("span", { class: "chip chip-global", text: t("dashboard.global") });
+  return el("span", { class: "chip chip-global" }, icon("globe"), el("span", { text: t("dashboard.global") }));
 }
 
 function audienceChips(audience, max = 2) {
@@ -267,11 +374,17 @@ function audienceChips(audience, max = 2) {
       label: g.name,
       title: (g.members || []).map(countryName).join(", "),
       cls: "chip chip-group",
+      mark: () => icon("group"),
     })),
-    ...audience.countries.map((c) => ({ label: countryName(c.code), title: c.code, cls: "chip" })),
+    ...audience.countries.map((c) => ({
+      label: countryName(c.code),
+      title: c.code,
+      cls: "chip",
+      mark: () => flagNode(c.code),
+    })),
   ];
   for (const it of items.slice(0, max)) {
-    wrap.append(el("span", { class: it.cls, text: it.label, title: it.title }));
+    wrap.append(el("span", { class: it.cls, title: it.title }, it.mark(), el("span", { text: it.label })));
   }
   if (items.length > max) {
     const rest = items.slice(max).map((it) => it.label).join(", ");
@@ -488,23 +601,290 @@ function removableChip(label, cls, onRemove) {
   );
 }
 
-// --- Tabs ------------------------------------------------------------------------
+// --- Toasts ----------------------------------------------------------------------
+// What happened, briefly, with an action such as Undo when there is one. A toast
+// with an action stays long enough to be used, and none goes while hovered.
 
-function showView() {
-  const view = location.hash === "#markets" ? "markets" : "documents";
-  for (const [name, tab] of Object.entries(els.tabs)) {
-    const active = name === view;
-    tab.setAttribute("aria-selected", active ? "true" : "false");
-    els.views[name].hidden = !active;
+function toast(text, { kind = "ok", action = null, timeout = 6000 } = {}) {
+  const node = el("div", { class: `toast toast-${kind}`, role: kind === "error" ? "alert" : null });
+  let timer = null;
+  const close = () => {
+    clearTimeout(timer);
+    node.classList.add("is-leaving");
+    setTimeout(() => node.remove(), 180);
+  };
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(close, action ? Math.max(timeout, 10000) : timeout);
+  };
+  node.append(el("span", { class: "toast-text", text }));
+  if (action) {
+    node.append(
+      el("button", {
+        type: "button",
+        class: "toast-action",
+        text: action.label,
+        onclick: () => {
+          close();
+          action.run();
+        },
+      }),
+    );
   }
-  // Back, or a tab, leaves the Markets tab - and the pop-up opened from it.
-  if (els.previewDialog.open) els.previewDialog.close();
-  setStatus(els.status, "");
+  node.append(
+    el("button", { type: "button", class: "toast-close", "aria-label": t("dashboard.close"), onclick: close }, icon("close")),
+  );
+  node.addEventListener("mouseenter", () => clearTimeout(timer));
+  node.addEventListener("mouseleave", arm);
+  els.toasts.append(node);
+  while (els.toasts.children.length > 4) els.toasts.firstElementChild.remove();
+  arm();
+  return close;
 }
 
-window.addEventListener("hashchange", showView);
+function flash(text, kind = "ok") {
+  toast(text, { kind });
+}
 
-// --- Markets ---------------------------------------------------------------------
+// --- Dialogs: confirm, and what stands in the way ----------------------------------
+// In the page rather than window.confirm(), which some embedded browsers
+// silently answer "no" to - and so a refusal can say what to do about it.
+
+let confirmResolve = null;
+
+function settleConfirm(value) {
+  const resolve = confirmResolve;
+  confirmResolve = null;
+  resolve?.(value);
+}
+
+// Resolves to true only when `confirm` was given and pressed. Without one the
+// dialog only informs, and its single button closes it.
+function confirmAction({ title, body = "", items = [], confirm = null, danger = false, cancel = null }) {
+  settleConfirm(false);
+  els.confirmTitle.textContent = title;
+  els.confirmBody.replaceChildren(
+    ...[body ? el("p", { text: body }) : null, items.length ? el("ul", { class: "blockers" }, ...items) : null].filter(
+      Boolean,
+    ),
+  );
+  els.confirmOk.hidden = !confirm;
+  els.confirmOk.textContent = confirm || "";
+  els.confirmOk.className = danger ? "btn-danger-solid" : "";
+  els.confirmCancel.textContent = cancel || t(confirm ? "dashboard.cancel" : "dashboard.close");
+  const done = new Promise((resolve) => {
+    confirmResolve = resolve;
+  });
+  if (!els.confirmDialog.open) els.confirmDialog.showModal();
+  // A destructive action waits for a deliberate choice.
+  (confirm && !danger ? els.confirmOk : els.confirmCancel).focus();
+  return done;
+}
+
+els.confirmOk.addEventListener("click", () => {
+  settleConfirm(true);
+  els.confirmDialog.close();
+});
+els.confirmCancel.addEventListener("click", () => els.confirmDialog.close());
+els.confirmDialog.addEventListener("close", () => settleConfirm(false));
+
+// One line of "what stands in the way", with the button that deals with it.
+function blocker(text, action) {
+  return el(
+    "li",
+    {},
+    el("span", { text }),
+    action
+      ? el("button", {
+          type: "button",
+          class: "btn-secondary",
+          text: action.label,
+          onclick: () => {
+            els.confirmDialog.close();
+            action.run();
+          },
+        })
+      : null,
+  );
+}
+
+// "Delete "x"?\nThis removes..." - a title and the line that explains it.
+function splitMessage(text) {
+  const [title, ...rest] = String(text).split("\n");
+  return { title, body: rest.join(" ") };
+}
+
+function anyModalOpen() {
+  return Boolean(document.querySelector("dialog[open]"));
+}
+
+// --- Popovers: menus and the upload options ----------------------------------------
+
+let openPop = null;
+
+function togglePopover(button, panel) {
+  const opening = panel.hidden;
+  closePopover();
+  if (!opening) return;
+  panel.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+  openPop = { button, panel };
+  panel.querySelector("button, input, a[href]")?.focus();
+}
+
+function closePopover(restoreFocus = false) {
+  if (!openPop) return;
+  const { button, panel } = openPop;
+  openPop = null;
+  panel.hidden = true;
+  button.setAttribute("aria-expanded", "false");
+  if (restoreFocus && button.isConnected) button.focus();
+}
+
+document.addEventListener("click", (e) => {
+  if (openPop && !openPop.panel.contains(e.target) && !openPop.button.contains(e.target)) closePopover();
+});
+
+function moreMenu(label, items) {
+  const panel = el(
+    "div",
+    { class: "popover menu", role: "menu", hidden: true },
+    ...items.map((it) =>
+      el(
+        "button",
+        {
+          type: "button",
+          role: "menuitem",
+          class: `menu-item${it.danger ? " is-danger" : ""}`,
+          onclick: () => {
+            closePopover();
+            it.run();
+          },
+        },
+        it.icon ? icon(it.icon) : null,
+        el("span", { text: it.label }),
+      ),
+    ),
+  );
+  const button = el(
+    "button",
+    {
+      type: "button",
+      class: "btn-icon more-btn",
+      "aria-label": label,
+      title: label,
+      "aria-haspopup": "menu",
+      "aria-expanded": "false",
+      "data-focus-key": "more",
+      onclick: () => togglePopover(button, panel),
+    },
+    icon("more"),
+  );
+  return el("div", { class: "menu-wrap" }, button, panel);
+}
+
+// --- Views: which market is open -------------------------------------------------
+
+function parseHash(hash) {
+  let parts;
+  try {
+    parts = decodeURIComponent(String(hash || "").replace(/^#\/?/, "")).split("/");
+  } catch {
+    return { kind: "all" };
+  }
+  if (parts[0] === "global") return { kind: "global" };
+  if (parts[0] === "group" && GROUP_KEY.test(parts[1] || "")) return { kind: "group", key: parts[1].toLowerCase() };
+  if (parts[0] === "country") {
+    const code = (parts[1] || "").toUpperCase();
+    if (COUNTRY_KEY.test(code)) return { kind: "country", key: code, scope: parts[2] === "sees" ? "sees" : "limited" };
+  }
+  // #all, and the old #documents / #markets tabs, are all of it.
+  return { kind: "all" };
+}
+
+function viewHash(view) {
+  if (view.kind === "global") return "#global";
+  if (view.kind === "group") return `#group/${view.key}`;
+  if (view.kind === "country") return `#country/${view.key}${view.scope === "sees" ? "/sees" : ""}`;
+  return "#all";
+}
+
+function sameMarket(a, b) {
+  return a.kind === b.kind && (a.key || "") === (b.key || "");
+}
+
+function viewExists(view) {
+  if (view.kind === "country") return state.markets.countries.some((c) => c.code === view.key);
+  if (view.kind === "group") return state.markets.groups.some((g) => g.id === view.key);
+  return true;
+}
+
+function findGroup(id) {
+  return state.markets.groups.find((g) => g.id === id);
+}
+
+function viewName(view) {
+  if (view.kind === "global") return t("dashboard.global");
+  if (view.kind === "country") return countryName(view.key);
+  if (view.kind === "group") return findGroup(view.key)?.name || "";
+  return t("dashboard.allDocuments");
+}
+
+// The Documents list's own filter for a view - the same test its count is.
+function whoParams(view) {
+  if (view.kind === "global") return { who: "global" };
+  if (view.kind === "group") return { who: view.key };
+  if (view.kind === "country") {
+    return view.scope === "sees" ? { who: view.key, include_global: "true" } : { who: view.key };
+  }
+  return {};
+}
+
+function viewCount(view) {
+  const m = state.markets;
+  if (view.kind === "global") return m.global_documents || 0;
+  if (view.kind === "group") return findGroup(view.key)?.documents || 0;
+  if (view.kind === "country") {
+    const own = m.countries.find((c) => c.code === view.key)?.documents || 0;
+    // Disjoint: a document limited to a market has audience rows, a Global one none.
+    return view.scope === "sees" ? own + (m.global_documents || 0) : own;
+  }
+  return m.total_documents || 0;
+}
+
+// Whether a new upload - always Global - belongs in this view.
+function showsGlobal(view) {
+  return view.kind === "all" || view.kind === "global" || (view.kind === "country" && view.scope === "sees");
+}
+
+function go(view) {
+  const hash = viewHash(view);
+  if (location.hash === hash) applyRoute();
+  else location.hash = hash;
+}
+
+function applyRoute() {
+  let view = parseHash(location.hash);
+  // A market removed since the link was made, or not there at all.
+  if (state.marketsLoaded && !viewExists(view)) view = { kind: "all" };
+  const hash = viewHash(view);
+  if (location.hash !== hash) history.replaceState(null, "", hash);
+  const changed = viewHash(state.view) !== hash;
+  state.view = view;
+  closeRail();
+  renderRail();
+  renderViewHead();
+  if (changed || !state.docsLoaded) {
+    state.offset = 0;
+    state.selected.clear();
+    state.active = -1;
+    loadDocs({ fresh: true });
+  }
+}
+
+window.addEventListener("hashchange", applyRoute);
+
+// --- Markets: the sidebar --------------------------------------------------------
 
 async function loadMarkets() {
   try {
@@ -513,334 +893,277 @@ async function loadMarkets() {
       countries: data?.countries || [],
       groups: data?.groups || [],
       global_documents: data?.global_documents ?? 0,
+      total_documents: data?.total_documents ?? 0,
     };
+    state.marketsLoaded = true;
   } catch (err) {
     flash(t("dashboard.loadMarketsFailed", { message: err.message }), "error");
     return;
   }
-  // What a closed list last showed may be out of date by the time it is opened
-  // again; open ones keep showing theirs until the refresh below replaces it.
-  for (const key of state.marketDocs.keys()) {
-    if (!state.expanded.has(key)) state.marketDocs.delete(key);
-  }
-  renderMarkets();
-  for (const key of state.expanded) loadMarketDocs(key);
-  renderWhoFilter();
+  renderRail();
+  if (state.docsLoaded && !viewExists(state.view)) applyRoute();
+  else renderViewHead();
   detailEditor.render();
   dialogEditor.render();
+  if (els.countryDialog.open) renderCountryResults();
 }
 
-function renderMarkets() {
-  keepFocus(drawMarkets);
-}
-
-function drawMarkets() {
-  const { countries, groups, global_documents: globalDocs } = state.markets;
-  pruneExpanded();
-  if (globalDocs) {
-    els.globalCount.replaceChildren(docsToggle("global", globalDocs));
-  } else {
-    els.globalCount.textContent = `(${t("dashboard.documents", { n: globalDocs })})`;
-  }
-  els.globalDocs.hidden = !state.expanded.has("global");
-  els.globalDocs.replaceChildren(...marketDocsContent("global"));
-  els.countriesSummary.textContent = countries.length
-    ? t("dashboard.countriesSummary", { count: t("dashboard.countries", { n: countries.length }) })
-    : t("dashboard.noCountries");
-
-  els.countryList.replaceChildren(
-    ...sortedCountries().map((c) => {
-      const name = countryName(c.code);
-      const inGroups = c.groups?.length ? t("dashboard.inGroups", { groups: c.groups.join(", ") }) : "";
-      // What actually blocks removal: a group containing it, or a document
-      // that names it directly. The database refuses either way.
-      const reasons = removalReasons(c.groups, c.direct_documents);
-      const blocked = Boolean(reasons);
-      const why = blocked ? t("dashboard.cantRemove", { reasons }) : "";
-      return el(
-        "li",
-        { class: "market-item" },
-        el(
-          "div",
-          { class: "market-main" },
-          el("span", { class: "market-name", text: name }),
-          el("span", { class: "market-code", text: c.code }),
-          el(
-            "span",
-            { class: "muted" },
-            c.documents ? docsToggle(c.code, c.documents) : null,
-            c.documents > 0 && inGroups ? " - " : null,
-            inGroups || null,
-          ),
-        ),
-        el("button", {
-          type: "button",
-          class: "btn-danger",
-          text: t("dashboard.remove"),
-          disabled: blocked,
-          title: why || t("dashboard.removeItem", { name }),
-          "aria-label": t("dashboard.removeItem", { name }),
-          onclick: () => removeCountry(c),
-        }),
-        blocked ? el("p", { class: "market-why", text: why }) : null,
-        docsBox(c.code),
-      );
-    }),
-  );
-
-  els.groupList.replaceChildren(
-    ...groups.map((g) => {
-      const blocked = g.documents > 0;
-      const why = blocked
-        ? t("dashboard.cantDelete", { n: g.documents })
-        : "";
-      return el(
-        "li",
-        { class: "group-card" },
-        el(
-          "div",
-          { class: "group-head" },
-          el("strong", { text: g.name }),
-          docsToggle(g.id, g.documents),
-        ),
-        el(
-          "div",
-          { class: "chips" },
-          ...(g.members || []).map((code) => el("span", { class: "chip", text: countryName(code), title: code })),
-        ),
-        el(
-          "div",
-          { class: "group-actions" },
-          el("button", { type: "button", class: "btn-secondary", text: t("dashboard.edit"), onclick: () => openGroupDialog(g) }),
-          el("button", {
-            type: "button",
-            class: "btn-danger",
-            text: t("dashboard.delete"),
-            disabled: blocked,
-            title: why || t("dashboard.deleteItem", { name: g.name }),
-            onclick: () => deleteGroup(g),
-          }),
-        ),
-        blocked ? el("p", { class: "market-why", text: why }) : null,
-        docsBox(g.id),
-      );
-    }),
-  );
-  if (!groups.length) {
-    els.groupList.append(el("li", { class: "muted", text: t("dashboard.noGroups") }));
-  }
-  els.newGroupBtn.disabled = !countries.length;
-  els.newGroupBtn.title = countries.length ? "" : t("dashboard.addCountriesFirst");
-  renderCountryResults();
-}
-
-// "it is in Scandinavia and 1 document is limited to it", or "" when nothing
-// stands in the way.
-function removalReasons(groups, directDocuments) {
-  const reasons = [];
-  if (groups?.length) reasons.push(t("dashboard.blockedInGroups", { groups: groups.join(", ") }));
-  if (directDocuments) reasons.push(t("dashboard.blockedDocuments", { n: directDocuments }));
-  return reasons.join(` ${t("dashboard.and")} `);
-}
-
-// --- Markets: the documents behind each count -----------------------------------
-// "2 documents" on Global, a country or a group opens the list of them in its
-// card. It is the Documents table's own Who filter - the same test the count
-// is - so a list and its count can never disagree about what "for Sweden" is.
-
-const COUNTRY_KEY = /^[A-Z]{2}$/;
-
-function docsListId(key) {
-  return `market-docs-${key}`;
-}
-
-function marketLabel(key) {
-  if (key === "global") return t("dashboard.global");
-  if (COUNTRY_KEY.test(key)) return countryName(key);
-  return state.markets.groups.find((g) => g.id === key)?.name || key;
-}
-
-function marketCount(key) {
-  if (key === "global") return state.markets.global_documents || 0;
-  if (COUNTRY_KEY.test(key)) return state.markets.countries.find((c) => c.code === key)?.documents || 0;
-  return state.markets.groups.find((g) => g.id === key)?.documents || 0;
-}
-
-// A list stays open across refreshes until there is nothing left in it: its
-// market was removed, or its last document retagged or deleted.
-function pruneExpanded() {
-  for (const key of [...state.expanded]) {
-    if (!marketCount(key)) {
-      state.expanded.delete(key);
-      state.marketDocs.delete(key);
-    }
-  }
-}
-
-// The count itself is the toggle; with nothing to list it stays plain text.
-function docsToggle(key, n) {
-  const text = t("dashboard.documents", { n });
-  if (!n) return el("span", { class: "muted", text });
-  return el("button", {
-    type: "button",
-    class: "link-btn docs-toggle",
-    text,
-    title: t("dashboard.docsFor", { name: marketLabel(key) }),
-    "aria-expanded": state.expanded.has(key) ? "true" : "false",
-    "aria-controls": docsListId(key),
-    "data-focus-key": `docs:${key}`,
-    onclick: () => toggleMarketDocs(key),
-  });
-}
-
-function docsBox(key) {
-  if (!marketCount(key)) return null;
-  return el(
-    "div",
-    { class: "market-docs", id: docsListId(key), hidden: !state.expanded.has(key) },
-    ...marketDocsContent(key),
-  );
-}
-
-// Only this card changes, so focus stays on the toggle that was pressed.
-function toggleMarketDocs(key) {
-  const open = !state.expanded.has(key);
-  if (open) state.expanded.add(key);
-  else state.expanded.delete(key);
-  document
-    .querySelector(`[data-focus-key="${CSS.escape(`docs:${key}`)}"]`)
-    ?.setAttribute("aria-expanded", open ? "true" : "false");
-  const box = document.getElementById(docsListId(key));
-  if (box) box.hidden = !open;
-  if (open) loadMarketDocs(key);
-}
-
-let marketDocsSeq = 0;
-
-async function loadMarketDocs(key) {
-  const seq = ++marketDocsSeq;
-  const prev = state.marketDocs.get(key);
-  // A refresh leaves the last list on screen; only a first load says so.
-  if (prev?.status === "ok") {
-    state.marketDocs.set(key, { ...prev, seq });
-  } else {
-    state.marketDocs.set(key, { status: "loading", seq });
-    fillMarketDocs(key);
-  }
-  let next;
-  try {
-    const params = new URLSearchParams({ who: key, limit: String(MARKET_LIST_LIMIT) });
-    const data = await api(`/api/documents?${params}`);
-    next = { status: "ok", docs: data?.documents || [], total: data?.total ?? 0, seq };
-  } catch (err) {
-    next = { status: "error", message: err.message, seq };
-  }
-  // A slower, older request must not paint over a newer one, nor bring back
-  // a list that was closed and dropped meanwhile.
-  if (state.marketDocs.get(key)?.seq !== seq) return;
-  state.marketDocs.set(key, next);
-  fillMarketDocs(key);
-}
-
-function fillMarketDocs(key) {
-  const box = document.getElementById(docsListId(key));
-  if (box) keepFocus(() => box.replaceChildren(...marketDocsContent(key)));
-}
-
-function marketDocsContent(key) {
-  if (!state.expanded.has(key)) return [];
-  const entry = state.marketDocs.get(key);
-  if (!entry || entry.status === "loading") {
-    return [el("p", { class: "muted", text: t("dashboard.loadingDocs") })];
-  }
-  if (entry.status === "error") {
-    return [
-      el("p", { class: "muted", text: t("dashboard.loadDocsFailed", { message: entry.message }) }),
-      el("button", {
-        type: "button",
-        class: "btn-link",
-        text: t("dashboard.retry"),
-        onclick: () => loadMarketDocs(key),
+function renderRail() {
+  const { countries, groups, global_documents: globalDocs, total_documents: total } = state.markets;
+  keepFocus(() => {
+    els.railTop.replaceChildren(
+      railItem({ kind: "all" }, icon("all"), t("dashboard.allDocuments"), total),
+      railItem({ kind: "global" }, icon("globe"), t("dashboard.global"), globalDocs, {
+        body: { everyone: true, countries: [], groups: [] },
+        hint: t("dashboard.dropMakeEveryone"),
       }),
+    );
+    els.railGroups.replaceChildren(
+      ...(groups.length
+        ? groups.map((g) =>
+            railItem({ kind: "group", key: g.id }, icon("group"), g.name, g.documents, {
+              body: { everyone: false, countries: [], groups: [g.id] },
+              hint: t("dashboard.dropMakeFor", { name: g.name }),
+              title: (g.members || []).map(countryName).join(", "),
+            }),
+          )
+        : [el("li", { class: "rail-empty", text: t("dashboard.noGroups") })]),
+    );
+    els.railCountries.replaceChildren(
+      ...(countries.length
+        ? sortedCountries().map((c) =>
+            railItem({ kind: "country", key: c.code }, flagNode(c.code), countryName(c.code), c.documents, {
+              body: { everyone: false, countries: [c.code], groups: [] },
+              hint: t("dashboard.dropMakeFor", { name: countryName(c.code) }),
+              title: c.code,
+            }),
+          )
+        : [el("li", { class: "rail-empty", text: t("dashboard.noCountries") })]),
+    );
+  });
+  els.newGroupBtn.disabled = !countries.length;
+  els.newGroupBtn.title = countries.length ? t("dashboard.newGroup") : t("dashboard.addCountriesFirst");
+}
+
+function railItem(view, mark, label, count, drop = null) {
+  const active = sameMarket(view, state.view);
+  const link = el(
+    "a",
+    {
+      href: viewHash(view),
+      class: `rail-item${active ? " is-active" : ""}`,
+      "aria-current": active ? "page" : null,
+      title: drop?.title || null,
+      "data-focus-key": `rail:${viewHash(view)}`,
+      "data-drop-hint": drop?.hint || null,
+    },
+    el("span", { class: "rail-mark" }, mark),
+    el("span", { class: "rail-label", text: label }),
+    el("span", { class: `rail-count${count ? "" : " is-zero"}`, text: String(count || 0) }),
+  );
+  if (drop) makeDropTarget(link, drop.body, label);
+  return el("li", {}, link);
+}
+
+// --- Markets: the header of the open one ------------------------------------------
+
+function renderViewHead() {
+  closePopover();
+  const view = state.view;
+  const name = viewName(view);
+  keepFocus(() => {
+    els.viewIcon.replaceChildren(viewMark(view));
+    els.viewName.textContent = name;
+    els.viewCode.textContent = view.kind === "country" ? view.key : "";
+    els.viewCode.hidden = view.kind !== "country";
+    // A country's counts are in its scope switch.
+    els.viewCount.textContent = view.kind === "country" ? "" : t("dashboard.documents", { n: viewCount(view) });
+    const sub = viewSub(view);
+    els.viewSub.replaceChildren(...sub);
+    els.viewSub.hidden = !sub.length;
+    els.viewActions.replaceChildren(...viewActions(view));
+  });
+  els.railOpen.replaceChildren(icon("menu"), el("span", { text: name }));
+  els.railOpen.title = t("dashboard.openLibrary");
+}
+
+function chipLink(href, mark, label, cls = "chip") {
+  return el("a", { class: `${cls} chip-link`, href }, mark, el("span", { text: label }));
+}
+
+function viewSub(view) {
+  if (view.kind === "all") return [el("span", { class: "muted", text: t("dashboard.allSub") })];
+  if (view.kind === "global") return [el("span", { class: "muted", text: t("dashboard.globalText") })];
+  if (view.kind === "country") {
+    const c = state.markets.countries.find((x) => x.code === view.key);
+    const groups = (c?.groups || []).map((groupName) => state.markets.groups.find((g) => g.name === groupName));
+    if (!groups.length) return [];
+    return [
+      el("span", { class: "sub-label", text: t("dashboard.partOf") }),
+      ...groups
+        .filter(Boolean)
+        .map((g) => chipLink(viewHash({ kind: "group", key: g.id }), icon("group"), g.name, "chip chip-group")),
     ];
   }
-  const out = [];
-  if (entry.docs.length) {
-    out.push(
-      el(
-        "ul",
-        { class: "market-docs-list", "aria-label": t("dashboard.docsFor", { name: marketLabel(key) }) },
-        ...entry.docs.map((d) => marketDocRow(key, d)),
-      ),
-    );
-  } else {
-    out.push(el("p", { class: "muted", text: t("dashboard.noDocsHere") }));
-  }
-  if (entry.total > entry.docs.length) {
-    out.push(
-      el("button", {
-        type: "button",
-        class: "btn-link",
-        text: t("dashboard.showAllInDocuments", { n: entry.total }),
-        "data-focus-key": `all:${key}`,
-        onclick: () => showInDocuments(key),
-      }),
-    );
-  }
-  // A country's list is what is limited to it; answers there draw on Global
-  // documents as well, which is easy to forget when looking at the list.
-  if (COUNTRY_KEY.test(key) && state.markets.global_documents) {
-    out.push(
-      el("p", {
-        class: "muted",
-        text: t("dashboard.globalAlsoApplies", { n: state.markets.global_documents, country: countryName(key) }),
-      }),
-    );
-  }
-  return out;
+  const g = findGroup(view.key);
+  if (!g) return [];
+  return [
+    el("span", { class: "sub-label", text: t("dashboard.members") }),
+    ...[...(g.members || [])]
+      .sort((a, b) => Lang.compare(countryName(a), countryName(b)))
+      .map((code) => chipLink(viewHash({ kind: "country", key: code }), flagNode(code), countryName(code))),
+  ];
 }
 
-function marketDocRow(key, d) {
-  const name = d.original_filename || d.id;
+function viewActions(view) {
+  if (view.kind === "country") {
+    const name = countryName(view.key);
+    return [
+      scopeSwitch(view),
+      moreMenu(t("dashboard.moreActions", { name }), [
+        { label: t("dashboard.removeNamed", { name }), icon: "trash", danger: true, run: () => removeCountry(view.key) },
+      ]),
+    ];
+  }
+  if (view.kind === "group") {
+    const g = findGroup(view.key);
+    if (!g) return [];
+    return [
+      el(
+        "button",
+        { type: "button", class: "btn-secondary btn-with-icon", "data-focus-key": "edit-group", onclick: () => openGroupDialog(g) },
+        icon("edit"),
+        el("span", { text: t("dashboard.editGroupButton") }),
+      ),
+      moreMenu(t("dashboard.moreActions", { name: g.name }), [
+        { label: t("dashboard.deleteNamed", { name: g.name }), icon: "trash", danger: true, run: () => deleteGroup(g) },
+      ]),
+    ];
+  }
+  return [];
+}
+
+// "Limited to Sweden 3 | Everything Sweden sees 13": what is Sweden's own, or
+// everything its answers can draw on - the same test retrieval filters with.
+function scopeSwitch(view) {
+  const name = countryName(view.key);
+  const button = (scope, label, title) =>
+    el(
+      "button",
+      {
+        type: "button",
+        class: "seg-btn",
+        "aria-pressed": view.scope === scope ? "true" : "false",
+        title,
+        "data-focus-key": `seg:${scope}`,
+        onclick: () => go({ ...view, scope }),
+      },
+      el("span", { text: label }),
+      el("span", { class: "seg-count", text: String(viewCount({ ...view, scope })) }),
+    );
   return el(
-    "li",
-    { class: "market-doc" },
-    el("button", {
-      type: "button",
-      class: "link-btn market-doc-name",
-      text: name,
-      title: t("dashboard.openPreview", { name }),
-      "data-focus-key": `doc:${key}:${d.id}`,
-      onclick: () => openPreviewDialog(d, key),
-    }),
-    // Its own markets, so a document in Sweden's list through SE+NO says so.
-    // Every row of the Global list would only say "Global" again.
-    key === "global" ? null : audienceChips(d.audience),
-    isIndexed(d.status) ? null : statusBadge(d),
-    el("a", {
-      class: "btn-link",
-      href: fileUrl(d),
-      text: t("dashboard.download"),
-      "aria-label": t("dashboard.downloadItem", { name }),
-    }),
+    "div",
+    { class: "seg", role: "group", "aria-label": t("dashboard.scopeLabel") },
+    button("limited", t("dashboard.limitedTo", { name }), t("dashboard.limitedHint", { name })),
+    button("sees", t("dashboard.everythingSees", { name }), t("dashboard.seesHint", { name })),
   );
 }
 
-async function removeCountry(c) {
-  const name = countryName(c.code);
-  if (!confirm(t("dashboard.confirmRemoveCountry", { name }))) return;
+// --- Markets: removing one ---------------------------------------------------------
+// Remove and Delete always answer: a confirm when nothing is in the way, or what
+// is - with the button that deals with it - instead of a greyed-out button.
+
+function showCountryBlockers(code, groups, direct) {
+  if (!groups.length && !direct) return false;
+  const name = countryName(code);
+  const items = groups.map((groupName) => {
+    const g = state.markets.groups.find((x) => x.name === groupName);
+    return blocker(
+      t("dashboard.blockerInGroup", { group: groupName }),
+      g ? { label: t("dashboard.editGroupButton"), run: () => openGroupDialog(g) } : null,
+    );
+  });
+  if (direct) {
+    items.push(
+      blocker(t("dashboard.blockerDirectDocs", { n: direct }), {
+        label: t("dashboard.showThem"),
+        run: () => go({ kind: "country", key: code, scope: "limited" }),
+      }),
+    );
+  }
+  confirmAction({ title: t("dashboard.stillInUse", { name }), body: t("dashboard.removeBlockedIntro"), items });
+  return true;
+}
+
+async function removeCountry(code) {
+  const c = state.markets.countries.find((x) => x.code === code);
+  if (!c) return;
+  const name = countryName(code);
+  if (showCountryBlockers(code, c.groups || [], c.direct_documents || 0)) return;
+  const ok = await confirmAction({
+    title: t("dashboard.removeCountryTitle", { name }),
+    body: t("dashboard.removeCountryBody"),
+    confirm: t("dashboard.remove"),
+    danger: true,
+  });
+  if (!ok) return;
   try {
-    await api(`/api/markets/countries/${encodeURIComponent(c.code)}`, { method: "DELETE" });
+    await api(`/api/markets/countries/${encodeURIComponent(code)}`, { method: "DELETE" });
     flash(t("dashboard.countryRemoved", { name }));
   } catch (err) {
-    // A refusal from the database carries what blocked it, so it can be said
-    // in the admin's language instead of the server's English.
+    // Something started using it since the sidebar was drawn.
     const detail = err.data?.detail;
-    const reasons = err.status === 409 && detail ? removalReasons(detail.groups, detail.documents) : "";
-    flash(reasons ? t("dashboard.cantRemoveNamed", { name, reasons }) : err.message, "error");
+    if (err.status === 409 && detail && typeof detail === "object") {
+      await loadMarkets();
+      showCountryBlockers(code, detail.groups || [], detail.documents || 0);
+      return;
+    }
+    flash(err.message, "error");
   }
   await loadMarkets();
 }
+
+function showGroupBlockers(g, n) {
+  confirmAction({
+    title: t("dashboard.stillInUse", { name: g.name }),
+    body: t("dashboard.removeBlockedIntro"),
+    items: [
+      blocker(t("dashboard.groupBlockedDocs", { n }), {
+        label: t("dashboard.showThem"),
+        run: () => go({ kind: "group", key: g.id }),
+      }),
+    ],
+  });
+}
+
+async function deleteGroup(g) {
+  if (g.documents) {
+    showGroupBlockers(g, g.documents);
+    return;
+  }
+  const ok = await confirmAction({
+    title: t("dashboard.deleteGroupTitle", { name: g.name }),
+    body: t("dashboard.deleteGroupBody"),
+    confirm: t("dashboard.delete"),
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await api(`/api/markets/groups/${g.id}`, { method: "DELETE" });
+    flash(t("dashboard.groupDeleted", { name: g.name }));
+  } catch (err) {
+    const n = err.data?.detail?.documents;
+    if (err.status === 409 && typeof n === "number") {
+      await loadMarkets();
+      showGroupBlockers(g, n);
+      return;
+    }
+    flash(err.message, "error");
+  }
+  await loadMarkets();
+}
+
+// --- Markets: adding a country -----------------------------------------------------
 
 async function ensureCatalogue() {
   if (state.catalogue) return;
@@ -907,10 +1230,20 @@ async function addCountry(c) {
     flash(err.message, "error");
   }
   await loadMarkets();
+  renderCountryResults();
   els.countrySearch.focus();
 }
 
-els.countrySearch.addEventListener("focus", ensureCatalogue);
+function openCountryDialog() {
+  els.countrySearch.value = "";
+  renderCountryResults();
+  els.countryDialog.showModal();
+  els.countrySearch.focus();
+  ensureCatalogue();
+}
+
+els.addCountryBtn.addEventListener("click", openCountryDialog);
+els.countryDialogClose.addEventListener("click", () => els.countryDialog.close());
 els.countrySearch.addEventListener("input", async () => {
   await ensureCatalogue();
   renderCountryResults();
@@ -995,77 +1328,82 @@ async function saveGroup() {
   }
 }
 
-async function deleteGroup(g) {
-  if (!confirm(t("dashboard.confirmDeleteGroup", { name: g.name }))) return;
-  try {
-    await api(`/api/markets/groups/${g.id}`, { method: "DELETE" });
-    flash(t("dashboard.groupDeleted", { name: g.name }));
-  } catch (err) {
-    const n = err.data?.detail?.documents;
-    flash(err.status === 409 && typeof n === "number" ? t("dashboard.cantDelete", { n }) : err.message, "error");
-  }
-  await loadMarkets();
-}
-
 els.newGroupBtn.addEventListener("click", () => openGroupDialog(null));
 els.groupFilter.addEventListener("input", renderGroupChecklist);
 els.groupDialogCancel.addEventListener("click", () => els.groupDialog.close());
 els.groupDialogSave.addEventListener("click", saveGroup);
 
-// --- Documents table -------------------------------------------------------------
+// --- The sidebar on a phone ------------------------------------------------------
 
-function renderWhoFilter() {
-  const current = els.whoFilter.value || state.who;
-  const opts = [
-    el("option", { value: "", text: t("dashboard.anyone") }),
-    el("option", { value: "global", text: t("dashboard.globalOption") }),
-  ];
-  if (state.markets.groups.length) {
-    opts.push(
-      el(
-        "optgroup",
-        { label: t("dashboard.groupsHeading") },
-        ...state.markets.groups.map((g) => el("option", { value: g.id, text: g.name })),
-      ),
-    );
-  }
-  if (state.markets.countries.length) {
-    opts.push(
-      el(
-        "optgroup",
-        { label: t("dashboard.countriesHeading") },
-        ...sortedCountries().map((c) => el("option", { value: c.code, text: countryName(c.code) })),
-      ),
-    );
-  }
-  els.whoFilter.replaceChildren(...opts);
-  const values = [...els.whoFilter.querySelectorAll("option")].map((o) => o.value);
-  els.whoFilter.value = values.includes(current) ? current : "";
-  state.who = els.whoFilter.value;
+function railIsOpen() {
+  return els.rail.classList.contains("is-open");
 }
 
-let loadSeq = 0;
+function openRail() {
+  els.rail.classList.add("is-open");
+  els.railScrim.hidden = false;
+  els.railOpen.setAttribute("aria-expanded", "true");
+  els.rail.querySelector(".rail-item.is-active, .rail-item")?.focus();
+}
 
-async function loadDocs() {
+function closeRail(restoreFocus = false) {
+  if (!railIsOpen()) return;
+  els.rail.classList.remove("is-open");
+  els.railScrim.hidden = true;
+  els.railOpen.setAttribute("aria-expanded", "false");
+  if (restoreFocus) els.railOpen.focus();
+}
+
+els.railOpen.addEventListener("click", () => (railIsOpen() ? closeRail() : openRail()));
+els.railClose.addEventListener("click", () => closeRail(true));
+els.railScrim.addEventListener("click", () => closeRail(true));
+
+// --- Documents table -------------------------------------------------------------
+
+let loadSeq = 0;
+let skeletonTimer = null;
+
+// `fresh` is a new view: its rows are not the ones on screen, so a skeleton
+// stands in for them if the answer takes a moment.
+async function loadDocs({ fresh = false } = {}) {
   const seq = ++loadSeq;
-  const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(state.offset) });
+  const params = new URLSearchParams({
+    limit: String(PAGE_SIZE),
+    offset: String(state.offset),
+    sort: state.sort,
+    ...whoParams(state.view),
+  });
   if (state.q) params.set("q", state.q);
-  if (state.who) params.set("who", state.who);
+  if (fresh) {
+    clearTimeout(skeletonTimer);
+    skeletonTimer = setTimeout(() => seq === loadSeq && renderSkeleton(), 120);
+  }
   let data;
   try {
     data = await api(`/api/documents?${params}`);
   } catch (err) {
+    if (seq !== loadSeq) return;
+    clearTimeout(skeletonTimer);
     flash(t("dashboard.loadDocsFailed", { message: err.message }), "error");
+    // Never leave one market's rows under another market's name.
+    if (fresh) {
+      state.docs = [];
+      state.total = 0;
+      renderDocs();
+    }
     return;
   }
   // A slower, older request must not paint over a newer one.
   if (seq !== loadSeq) return;
+  clearTimeout(skeletonTimer);
+  state.docsLoaded = true;
   state.docs = data?.documents || [];
   state.total = data?.total ?? state.docs.length;
   if (state.offset && state.offset >= state.total) {
     state.offset = Math.max(0, Math.floor((state.total - 1) / PAGE_SIZE) * PAGE_SIZE);
     return loadDocs();
   }
+  if (state.active >= state.docs.length) state.active = state.docs.length - 1;
   renderDocs();
   if (state.detail) {
     const fresh = state.docs.find((d) => d.id === state.detail.id);
@@ -1074,59 +1412,180 @@ async function loadDocs() {
   scheduleTick();
 }
 
-function renderDocs() {
-  const rows = state.docs.map((d) => {
-    const box = el("input", {
-      type: "checkbox",
-      checked: state.selected.has(d.id),
-      "aria-label": t("dashboard.selectDoc", { name: d.original_filename }),
-      onclick: (e) => e.stopPropagation(),
-      onchange: (e) => {
-        if (e.target.checked) state.selected.add(d.id);
-        else state.selected.delete(d.id);
-        renderBulkBar();
-      },
-    });
-    const name = el("button", {
-      type: "button",
-      class: "link-btn",
-      text: d.original_filename || d.id,
-      onclick: (e) => {
-        e.stopPropagation();
+function renderSkeleton() {
+  els.tableWrap.hidden = false;
+  els.docsEmpty.hidden = true;
+  const bar = (w) => el("span", { class: "sk", style: `width:${w}` });
+  els.rows.replaceChildren(
+    ...[62, 48, 70, 55, 40].map((w) =>
+      el(
+        "tr",
+        { class: "sk-row", "aria-hidden": "true" },
+        el("td", { class: "col-check" }, bar("14px")),
+        el("td", { class: "col-name" }, bar(`${w}%`)),
+        el("td", { class: "col-who" }, bar("64px")),
+        el("td", { class: "col-status" }, bar("52px")),
+        el("td", { class: "col-date" }, bar("70px")),
+        el("td", { class: "col-actions" }),
+      ),
+    ),
+  );
+}
+
+function docRow(d, i) {
+  const name = d.original_filename || d.id;
+  const selected = state.selected.has(d.id);
+  const box = el("input", {
+    type: "checkbox",
+    tabindex: "-1",
+    checked: selected,
+    "aria-label": t("dashboard.selectDoc", { name }),
+    onclick: (e) => e.stopPropagation(),
+    onchange: (e) => setSelected(d.id, e.target.checked),
+  });
+  const classes = ["doc-row"];
+  if (state.detail?.id === d.id) classes.push("is-open");
+  if (selected) classes.push("is-selected");
+  return el(
+    "tr",
+    {
+      class: classes.join(" "),
+      // One stop for Tab; the arrow keys move between rows (roving tabindex).
+      tabindex: i === Math.max(state.active, 0) ? "0" : "-1",
+      draggable: "true",
+      "data-focus-key": `row:${d.id}`,
+      onclick: () => {
+        setActive(i);
         openDetail(d);
       },
-    });
-    const tr = el(
-      "tr",
+      onfocus: () => setActive(i, { focus: false }),
+      ondragstart: (e) => onRowDragStart(e, d),
+      ondragend: onRowDragEnd,
+    },
+    el(
+      "td",
       {
-        class: state.detail?.id === d.id ? "is-open" : "",
-        onclick: () => openDetail(d),
+        class: "col-check",
+        // The whole cell ticks the box: a near-miss should not open the drawer.
+        onclick: (e) => {
+          e.stopPropagation();
+          if (e.target !== box) box.click();
+        },
       },
-      el("td", { class: "col-check" }, box),
-      el("td", { class: "col-name" }, name, d.collection ? el("small", { class: "muted", text: d.collection }) : null),
-      el("td", {}, audienceChips(d.audience)),
-      el("td", {}, statusBadge(d)),
-      el("td", { class: "col-date", text: formatDate(d.created_at) }),
-    );
-    return tr;
-  });
-  els.rows.replaceChildren(...rows);
+      box,
+    ),
+    el(
+      "td",
+      { class: "col-name" },
+      el(
+        "div",
+        { class: "doc-name" },
+        el("span", { class: `doc-icon${isImage(d) ? " is-image" : ""}` }, icon(isImage(d) ? "image" : "file")),
+        el(
+          "div",
+          { class: "doc-name-text" },
+          el("button", {
+            type: "button",
+            class: "doc-open",
+            tabindex: "-1",
+            text: name,
+            title: name,
+            onclick: (e) => {
+              e.stopPropagation();
+              setActive(i);
+              openDetail(d);
+            },
+          }),
+          d.collection ? el("small", { class: "muted", text: d.collection }) : null,
+          // On a phone the "Who it's for" column gives its room to the name,
+          // and its chips sit here instead.
+          el("span", { class: "who-inline" }, audienceChips(d.audience)),
+        ),
+      ),
+    ),
+    el("td", { class: "col-who" }, audienceChips(d.audience)),
+    el("td", { class: "col-status" }, statusBadge(d)),
+    el("td", { class: "col-date", text: formatDate(d.created_at) }),
+    el(
+      "td",
+      { class: "col-actions" },
+      el(
+        "a",
+        {
+          class: "row-action",
+          href: fileUrl(d),
+          tabindex: "-1",
+          draggable: "false",
+          title: t("dashboard.downloadItem", { name }),
+          "aria-label": t("dashboard.downloadItem", { name }),
+          onclick: (e) => e.stopPropagation(),
+        },
+        icon("download"),
+      ),
+    ),
+  );
+}
 
-  const filtered = state.q || state.who;
-  els.docsEmpty.hidden = state.docs.length > 0;
-  els.docsEmpty.textContent = t(filtered ? "dashboard.noDocsMatch" : "dashboard.noDocsYet");
+function renderDocs() {
+  keepFocus(() => els.rows.replaceChildren(...state.docs.map(docRow)));
+  const empty = state.docs.length === 0;
+  els.tableWrap.hidden = empty;
+  els.docsEmpty.hidden = !empty;
+  if (empty) els.docsEmpty.replaceChildren(...emptyState());
 
   const from = state.total ? state.offset + 1 : 0;
   const to = state.offset + state.docs.length;
   els.pageInfo.textContent = state.total ? t("dashboard.pageInfo", { from, to, total: state.total }) : "";
   els.prev.disabled = state.offset === 0;
   els.next.disabled = to >= state.total;
+  els.prev.parentElement.hidden = state.total <= PAGE_SIZE && state.offset === 0;
+  renderSortHeaders();
+  renderBulkBar();
+}
+
+function emptyState() {
+  const view = state.view;
+  let title;
+  let hint = "";
+  if (state.q) {
+    title = t("dashboard.noDocsMatch");
+  } else if (view.kind === "all") {
+    title = t("dashboard.noDocsYet");
+  } else if (view.kind === "global") {
+    title = t("dashboard.emptyGlobal");
+  } else {
+    const name = viewName(view);
+    title = t("dashboard.emptyMarket", { name });
+    hint = t("dashboard.emptyMarketHint", { name });
+  }
+  return [
+    el("span", { class: "empty-icon" }, view.kind === "all" ? icon("all") : viewMark(view)),
+    el("strong", { text: title }),
+    hint ? el("span", { class: "muted", text: hint }) : null,
+  ].filter(Boolean);
+}
+
+function setActive(i, { focus = true } = {}) {
+  if (i < 0 || i >= state.docs.length) return;
+  state.active = i;
+  const rows = els.rows.querySelectorAll("tr.doc-row");
+  rows.forEach((row, j) => row.setAttribute("tabindex", j === i ? "0" : "-1"));
+  if (focus) rows[i]?.focus();
+}
+
+function setSelected(id, on) {
+  if (on) state.selected.add(id);
+  else state.selected.delete(id);
+  els.rows
+    .querySelector(`tr[data-focus-key="${CSS.escape(`row:${id}`)}"]`)
+    ?.classList.toggle("is-selected", on);
   renderBulkBar();
 }
 
 function renderBulkBar() {
   const n = state.selected.size;
   els.bulkBar.hidden = n === 0;
+  document.body.classList.toggle("has-bulk", n > 0);
   els.bulkCount.textContent = t("dashboard.selectedCount", { n });
   const onPage = state.docs.map((d) => d.id);
   const pickedOnPage = onPage.filter((id) => state.selected.has(id)).length;
@@ -1145,26 +1604,22 @@ els.search.addEventListener("input", () => {
   searchTimer = setTimeout(() => {
     state.q = els.search.value.trim();
     state.offset = 0;
+    state.active = -1;
     state.selected.clear();
     loadDocs();
   }, 250);
 });
 
-els.whoFilter.addEventListener("change", () => {
-  state.who = els.whoFilter.value;
-  state.offset = 0;
-  state.selected.clear();
-  loadDocs();
-});
-
 els.prev.addEventListener("click", () => {
   state.offset = Math.max(0, state.offset - PAGE_SIZE);
+  state.active = -1;
   state.selected.clear();
   loadDocs();
 });
 
 els.next.addEventListener("click", () => {
   state.offset += PAGE_SIZE;
+  state.active = -1;
   state.selected.clear();
   loadDocs();
 });
@@ -1179,7 +1634,280 @@ els.selectAll.addEventListener("change", () => {
 
 els.bulkClearBtn.addEventListener("click", clearSelection);
 
-// --- Detail panel ----------------------------------------------------------------
+// --- Sorting ---------------------------------------------------------------------
+
+function loadSort() {
+  try {
+    const saved = localStorage.getItem(SORT_KEY);
+    if (SORTS.includes(saved)) state.sort = saved;
+  } catch {
+    /* the default, newest first */
+  }
+}
+
+function renderSortHeaders() {
+  const [column, dir] = state.sort.split("_");
+  for (const [th, key] of [
+    [els.thName, "name"],
+    [els.thDate, "uploaded"],
+  ]) {
+    th.setAttribute("aria-sort", column === key ? (dir === "asc" ? "ascending" : "descending") : "none");
+  }
+}
+
+for (const button of document.querySelectorAll(".sort-btn")) {
+  button.addEventListener("click", () => {
+    const key = button.dataset.sort;
+    const [column, dir] = state.sort.split("_");
+    // A second click reverses; a new column starts the way it is usually read.
+    const next = column === key ? `${key}_${dir === "asc" ? "desc" : "asc"}` : `${key}_${key === "name" ? "asc" : "desc"}`;
+    if (!SORTS.includes(next)) return;
+    state.sort = next;
+    try {
+      localStorage.setItem(SORT_KEY, next);
+    } catch {
+      /* this page only */
+    }
+    state.offset = 0;
+    state.active = -1;
+    state.selected.clear();
+    renderSortHeaders();
+    loadDocs();
+  });
+}
+
+// --- Drag to retag ---------------------------------------------------------------
+// Dropping documents on a market in the sidebar makes them for it alone, as a
+// file moves into a folder. Never "also for": adding a market to a Global
+// document would narrow it, the opposite of what "also" sounds like. Undo puts
+// back exactly what each document was for.
+
+function audienceBody(audience) {
+  if (!audience || audience.everyone) return { everyone: true, countries: [], groups: [] };
+  return {
+    everyone: false,
+    countries: audience.countries.map((c) => c.code ?? c),
+    groups: audience.groups.map((g) => g.id ?? g),
+  };
+}
+
+function bodyKey(body) {
+  return JSON.stringify([body.everyone, [...body.countries].sort(), [...body.groups].sort()]);
+}
+
+function isDocDrag(e) {
+  return Array.from(e.dataTransfer?.types || []).includes(DRAG_TYPE);
+}
+
+function onRowDragStart(e, d) {
+  const ids = state.selected.has(d.id) ? state.docs.filter((x) => state.selected.has(x.id)).map((x) => x.id) : [d.id];
+  const label = ids.length === 1 ? d.original_filename || d.id : t("dashboard.documents", { n: ids.length });
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData(DRAG_TYPE, JSON.stringify(ids));
+  e.dataTransfer.setData("text/plain", label);
+  const ghost = el("div", { class: "drag-ghost" }, icon("file"), el("span", { text: label }));
+  document.body.append(ghost);
+  e.dataTransfer.setDragImage(ghost, 14, 14);
+  setTimeout(() => ghost.remove(), 0);
+  document.body.classList.add("is-dragging-docs");
+}
+
+function onRowDragEnd() {
+  document.body.classList.remove("is-dragging-docs");
+  for (const node of document.querySelectorAll(".rail-item.is-drop")) node.classList.remove("is-drop");
+}
+
+function makeDropTarget(node, body, name) {
+  node.addEventListener("dragenter", (e) => {
+    if (!isDocDrag(e)) return;
+    e.preventDefault();
+    node.classList.add("is-drop");
+  });
+  node.addEventListener("dragover", (e) => {
+    if (!isDocDrag(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  });
+  node.addEventListener("dragleave", (e) => {
+    if (!node.contains(e.relatedTarget)) node.classList.remove("is-drop");
+  });
+  node.addEventListener("drop", (e) => {
+    if (!isDocDrag(e)) return;
+    e.preventDefault();
+    onRowDragEnd();
+    let ids = [];
+    try {
+      ids = JSON.parse(e.dataTransfer.getData(DRAG_TYPE) || "[]");
+    } catch {
+      return;
+    }
+    moveDocs(ids, body, name);
+  });
+}
+
+async function moveDocs(ids, body, name) {
+  const docs = ids.map((id) => state.docs.find((d) => d.id === id)).filter(Boolean);
+  const target = bodyKey(body);
+  const moving = docs.filter((d) => bodyKey(audienceBody(d.audience)) !== target);
+  if (!moving.length) {
+    if (docs.length) flash(t("dashboard.alreadyThere", { name }));
+    return;
+  }
+  const before = moving.map((d) => ({ id: d.id, body: audienceBody(d.audience) }));
+  const movedIds = moving.map((d) => d.id);
+  try {
+    await api("/api/documents/audience", { method: "PUT", body: { document_ids: movedIds, ...body } });
+  } catch (err) {
+    flash(t("dashboard.moveFailed", { message: err.message }), "error");
+    return;
+  }
+  state.selected.clear();
+  await refreshAfterChange(movedIds);
+  toast(t("dashboard.moved", { n: moving.length, name }), {
+    action: { label: t("dashboard.undo"), run: () => undoMove(before) },
+  });
+}
+
+// One request per distinct "what it was for", so ten documents that were all
+// Global go back in one go.
+async function undoMove(before) {
+  const batches = new Map();
+  for (const { id, body } of before) {
+    const key = bodyKey(body);
+    if (!batches.has(key)) batches.set(key, { body, ids: [] });
+    batches.get(key).ids.push(id);
+  }
+  let failed = 0;
+  for (const { body, ids } of batches.values()) {
+    try {
+      await api("/api/documents/audience", { method: "PUT", body: { document_ids: ids, ...body } });
+    } catch {
+      failed += ids.length;
+    }
+  }
+  await refreshAfterChange(before.map((b) => b.id));
+  if (failed) flash(t("dashboard.undoFailed", { failed, total: before.length }), "error");
+  else flash(t("dashboard.undone"));
+}
+
+// After documents changed who they are for: the table, the counts, and the
+// drawer if it shows one of them - read afresh, since it may have left the view.
+async function refreshAfterChange(ids = []) {
+  const openId = state.detail?.id;
+  await Promise.all([loadDocs(), loadMarkets()]);
+  if (openId && ids.includes(openId) && state.detail?.id === openId) {
+    try {
+      const doc = await api(`/api/documents/${encodeURIComponent(openId)}`);
+      if (state.detail?.id === openId) {
+        refreshDetailMeta(doc);
+        detailEditor.set(doc.audience);
+        updateDetailSave();
+      }
+    } catch {
+      /* the next refresh catches up */
+    }
+  }
+}
+
+// --- Keyboard --------------------------------------------------------------------
+
+function isTyping(node) {
+  if (!(node instanceof Element)) return false;
+  if (node.isContentEditable) return true;
+  if (node.tagName === "TEXTAREA" || node.tagName === "SELECT") return true;
+  return node.tagName === "INPUT" && !["checkbox", "radio", "button", "submit"].includes(node.type);
+}
+
+// Arrows, Enter, Space and x belong to the control that has focus - a radio
+// button, a link - unless that is a row of the table or nothing at all.
+function keysAreOurs(node) {
+  if (!(node instanceof Element) || node === document.body) return true;
+  if (node.matches("tr.doc-row")) return true;
+  return !node.closest("input, textarea, select, button, a[href], summary, iframe, [contenteditable]");
+}
+
+function activeDoc() {
+  return state.docs[state.active] || null;
+}
+
+function moveActive(delta) {
+  if (!state.docs.length) return;
+  const i =
+    state.active < 0
+      ? delta > 0
+        ? 0
+        : state.docs.length - 1
+      : Math.min(state.docs.length - 1, Math.max(0, state.active + delta));
+  setActive(i);
+  // With the drawer open, the arrows page through documents in it.
+  if (state.detail) openDetail(state.docs[i], { deferPreview: true });
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented || e.isComposing) return;
+  if (e.key === "Escape") {
+    if (openPop) {
+      e.preventDefault();
+      closePopover(true);
+      return;
+    }
+    if (anyModalOpen()) return;
+    if (railIsOpen()) {
+      closeRail(true);
+      return;
+    }
+    if (isTyping(e.target)) return;
+    if (state.detail) {
+      e.preventDefault();
+      closeDetail({ restoreFocus: true });
+    } else if (state.selected.size) {
+      clearSelection();
+    }
+    return;
+  }
+  if (anyModalOpen() || e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
+  if (e.key === "/") {
+    e.preventDefault();
+    els.search.focus();
+    els.search.select();
+    return;
+  }
+  if (e.key === "?") {
+    e.preventDefault();
+    els.shortcutsDialog.showModal();
+    return;
+  }
+  if (!keysAreOurs(e.target)) return;
+  switch (e.key) {
+    case "ArrowDown":
+    case "j":
+      e.preventDefault();
+      moveActive(1);
+      break;
+    case "ArrowUp":
+    case "k":
+      e.preventDefault();
+      moveActive(-1);
+      break;
+    case "Enter":
+    case " ":
+      if (!activeDoc()) return;
+      e.preventDefault();
+      openDetail(activeDoc());
+      break;
+    case "x":
+      if (!activeDoc()) return;
+      e.preventDefault();
+      setSelected(activeDoc().id, !state.selected.has(activeDoc().id));
+      break;
+    default:
+  }
+});
+
+els.shortcutsBtn.addEventListener("click", () => els.shortcutsDialog.showModal());
+els.shortcutsClose.addEventListener("click", () => els.shortcutsDialog.close());
+
+// --- Detail drawer ---------------------------------------------------------------
 
 const detailEditor = createAudienceEditor({ onChange: updateDetailSave });
 els.detailEditor.append(detailEditor.root);
@@ -1269,123 +1997,51 @@ function loadPreview(doc) {
   );
 }
 
-function openDetail(doc) {
+let previewTimer = null;
+
+// The drawer is not modal: the table stays usable beside it, and with the
+// arrow keys the drawer follows the row, Quick Look style. `deferPreview` waits
+// for the arrows to settle before fetching a file.
+function openDetail(doc, { deferPreview = false } = {}) {
   const switching = state.detail?.id !== doc.id;
   refreshDetailMeta(doc);
   els.detailName.textContent = doc.original_filename || doc.id;
   els.detailDownload.href = fileUrl(doc);
   els.detail.hidden = false;
-  els.docsWrap.classList.add("has-detail");
+  document.body.classList.add("has-drawer");
   if (switching) {
     detailEditor.set(doc.audience);
     setStatus(els.detailStatus, "");
-    loadPreview(doc);
+    clearTimeout(previewTimer);
+    if (deferPreview) {
+      clearPreview();
+      els.preview.append(el("p", { class: "muted", text: t("dashboard.loadingPreview") }));
+      previewTimer = setTimeout(() => loadPreview(doc), 160);
+    } else {
+      loadPreview(doc);
+    }
   }
   updateDetailSave();
-  renderDocs();
-  if (window.matchMedia("(max-width: 1100px)").matches) {
-    els.detail.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
+  markOpenRow();
 }
 
-function closeDetail() {
+function markOpenRow() {
+  const key = state.detail ? `row:${state.detail.id}` : "";
+  for (const row of els.rows.querySelectorAll("tr.doc-row")) row.classList.toggle("is-open", row.dataset.focusKey === key);
+}
+
+function closeDetail({ restoreFocus = false } = {}) {
+  const id = state.detail?.id;
+  clearTimeout(previewTimer);
   state.detail = null;
   clearPreview();
   els.detail.hidden = true;
-  els.docsWrap.classList.remove("has-detail");
-  renderDocs();
+  document.body.classList.remove("has-drawer");
+  markOpenRow();
+  if (restoreFocus && id) document.querySelector(`[data-focus-key="${CSS.escape(`row:${id}`)}"]`)?.focus();
 }
 
-els.detailClose.addEventListener("click", closeDetail);
-
-// --- Preview pop-up (Markets tab) ------------------------------------------------
-// A look at a document from a market's list without leaving the tab. Changing
-// who it is for, or deleting it, stays in the Documents tab's detail panel.
-
-let previewSeq = 0;
-let previewDialogUrl = null;
-
-function openPreviewDialog(doc, key) {
-  const seq = ++previewSeq;
-  state.preview = {
-    doc,
-    key,
-    seq,
-    // A key, not the element: the list may be rebuilt while this is open.
-    opener: document.activeElement?.dataset?.focusKey || null,
-  };
-  els.previewDialogTitle.textContent = doc.original_filename || doc.id;
-  els.previewDialogDownload.href = fileUrl(doc);
-  renderPreviewDialogMeta();
-  if (!els.previewDialog.open) els.previewDialog.showModal();
-  showPreview(
-    doc,
-    els.previewDialogBody,
-    () => state.preview?.seq === seq && els.previewDialog.open,
-    (url) => {
-      if (previewDialogUrl) URL.revokeObjectURL(previewDialogUrl);
-      previewDialogUrl = url;
-    },
-  );
-}
-
-function renderPreviewDialogMeta() {
-  const doc = state.preview?.doc;
-  if (!doc) return;
-  els.previewDialogMeta.replaceChildren(
-    el(
-      "div",
-      { class: "facts" },
-      audienceChips(doc.audience, 6),
-      isIndexed(doc.status) ? null : statusBadge(doc),
-      el("span", { text: t("dashboard.uploadedOn", { date: formatDate(doc.created_at) }) }),
-    ),
-  );
-  els.previewDialogDownload.setAttribute(
-    "aria-label",
-    t("dashboard.downloadItem", { name: doc.original_filename || doc.id }),
-  );
-}
-
-// Also runs for Escape and for showView closing it.
-els.previewDialog.addEventListener("close", () => {
-  previewSeq++;
-  if (previewDialogUrl) URL.revokeObjectURL(previewDialogUrl);
-  previewDialogUrl = null;
-  els.previewDialogBody.replaceChildren();
-  const opener = state.preview?.opener;
-  state.preview = null;
-  if (opener && !els.views.markets.hidden) {
-    document.querySelector(`[data-focus-key="${CSS.escape(opener)}"]`)?.focus();
-  }
-});
-
-els.previewDialogClose.addEventListener("click", () => els.previewDialog.close());
-
-els.previewDialogWho.addEventListener("click", () => {
-  const shown = state.preview;
-  if (!shown) return;
-  els.previewDialog.close();
-  showInDocuments(shown.key, shown.doc);
-});
-
-// The Documents table filtered to what a market's list showed, where its
-// documents can be retagged - with `doc`, if given, open in the detail panel.
-function showInDocuments(key, doc) {
-  clearTimeout(searchTimer);
-  els.search.value = "";
-  state.q = "";
-  els.whoFilter.value = key;
-  // Back to "anyone" if that market has gone since the list was drawn.
-  state.who = els.whoFilter.value;
-  state.offset = 0;
-  state.selected.clear();
-  location.hash = "#documents";
-  showView();
-  window.scrollTo({ top: 0 });
-  loadDocs();
-  if (doc) openDetail(doc);
-}
+els.detailClose.addEventListener("click", () => closeDetail({ restoreFocus: true }));
 
 els.detailSave.addEventListener("click", async () => {
   if (!state.detail || !detailEditor.valid()) return;
@@ -1397,6 +2053,7 @@ els.detailSave.addEventListener("click", async () => {
       body: detailEditor.selection(),
     });
     if (updated?.audience) detailEditor.set(updated.audience);
+    if (updated && state.detail?.id === doc.id) refreshDetailMeta(updated);
     setStatus(els.detailStatus, t("dashboard.savedNoReprocess"), "ok");
     await Promise.all([loadDocs(), loadMarkets()]);
   } catch (err) {
@@ -1409,11 +2066,12 @@ els.detailSave.addEventListener("click", async () => {
 els.detailDelete.addEventListener("click", async () => {
   const doc = state.detail;
   if (!doc) return;
-  if (!confirm(t("dashboard.confirmDeleteDoc", { name: doc.original_filename }))) return;
+  const { title, body } = splitMessage(t("dashboard.confirmDeleteDoc", { name: doc.original_filename }));
+  if (!(await confirmAction({ title, body, confirm: t("dashboard.delete"), danger: true }))) return;
   try {
     await api(`/api/documents/${encodeURIComponent(doc.id)}`, { method: "DELETE" });
     state.selected.delete(doc.id);
-    closeDetail();
+    if (state.detail?.id === doc.id) closeDetail();
     flash(t("dashboard.docDeleted", { name: doc.original_filename }));
   } catch (err) {
     setStatus(els.detailStatus, err.message, "error");
@@ -1455,14 +2113,9 @@ els.audienceDialogSave.addEventListener("click", async () => {
     els.audienceDialog.close();
     state.selected.clear();
     flash(t("dashboard.bulkUpdated", { n: ids.length }));
-    const openId = state.detail?.id;
-    await Promise.all([loadDocs(), loadMarkets()]);
-    // loadDocs refreshes the open panel's facts but leaves its editor alone, so
-    // as not to wipe unsaved choices; here the saved answer is the new truth.
-    if (openId && ids.includes(openId)) {
-      const fresh = state.docs.find((d) => d.id === openId);
-      if (fresh) detailEditor.set(fresh.audience);
-    }
+    // The saved answer is the new truth for an open drawer, so its editor is
+    // replaced too - otherwise loadDocs leaves it alone, unsaved choices and all.
+    await refreshAfterChange(ids);
   } catch (err) {
     setStatus(els.audienceDialogStatus, err.message, "error");
   } finally {
@@ -1473,7 +2126,8 @@ els.audienceDialogSave.addEventListener("click", async () => {
 els.bulkDeleteBtn.addEventListener("click", async () => {
   const ids = [...state.selected];
   if (!ids.length) return;
-  if (!confirm(t("dashboard.confirmBulkDelete", { n: ids.length }))) return;
+  const { title, body } = splitMessage(t("dashboard.confirmBulkDelete", { n: ids.length }));
+  if (!(await confirmAction({ title, body, confirm: t("dashboard.delete"), danger: true }))) return;
   els.bulkDeleteBtn.disabled = true;
   let failed = 0;
   for (const id of ids) {
@@ -1495,7 +2149,7 @@ els.bulkDeleteBtn.addEventListener("click", async () => {
   await Promise.all([loadDocs(), loadMarkets()]);
 });
 
-// --- Upload queue ----------------------------------------------------------------
+// --- Upload ----------------------------------------------------------------------
 // One file at a time, each waiting until it has been indexed before the next
 // goes up - the same pacing the chat page's sidebar used, which keeps
 // LlamaParse rate-limit pressure low.
@@ -1524,13 +2178,20 @@ function uploadWithProgress(formData, onProgress) {
   });
 }
 
-els.uploadBtn.addEventListener("click", () => els.fileInput.click());
+function isUploadable(file) {
+  const type = (file.type || "").toLowerCase();
+  return type === "application/pdf" || type === "image/jpeg" || /\.(pdf|jpe?g)$/i.test(file.name || "");
+}
 
-els.fileInput.addEventListener("change", () => {
-  const files = Array.from(els.fileInput.files || []);
-  if (!files.length) return;
+// From the picker or a drop. The server checks again; this only spares a
+// pointless upload and says why at once.
+function enqueueFiles(files) {
+  const accepted = files.filter(isUploadable);
+  const skipped = files.length - accepted.length;
+  if (skipped) flash(t("dashboard.notUploadable", { n: skipped }), "error");
+  if (!accepted.length) return;
   const collection = els.collectionInput.value.trim() || null;
-  for (const file of files) {
+  for (const file of accepted) {
     state.queue.push({
       qid: state.nextQid++,
       file,
@@ -1544,9 +2205,60 @@ els.fileInput.addEventListener("change", () => {
       error: null,
     });
   }
-  els.fileInput.value = "";
+  setTrayOpen(true);
   renderQueue();
   pumpQueue();
+}
+
+els.uploadBtn.addEventListener("click", () => els.fileInput.click());
+els.uploadOptionsBtn.addEventListener("click", () => togglePopover(els.uploadOptionsBtn, els.uploadOptions));
+
+els.fileInput.addEventListener("change", () => {
+  const files = Array.from(els.fileInput.files || []);
+  els.fileInput.value = "";
+  if (files.length) enqueueFiles(files);
+});
+
+// Files dragged in from the desktop. Rows dragged within the page are a
+// different thing (DRAG_TYPE) and never show this.
+let fileDragDepth = 0;
+
+function isFileDrag(e) {
+  return Array.from(e.dataTransfer?.types || []).includes("Files");
+}
+
+els.libMain.addEventListener("dragenter", (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  fileDragDepth++;
+  els.dropzone.hidden = false;
+});
+els.libMain.addEventListener("dragover", (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+});
+els.libMain.addEventListener("dragleave", (e) => {
+  if (!isFileDrag(e)) return;
+  fileDragDepth = Math.max(0, fileDragDepth - 1);
+  if (!fileDragDepth) els.dropzone.hidden = true;
+});
+els.libMain.addEventListener("drop", (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  fileDragDepth = 0;
+  els.dropzone.hidden = true;
+  enqueueFiles(Array.from(e.dataTransfer.files || []));
+});
+// A file let go anywhere else must not make the browser open it in place of
+// the page - and the pointer says it cannot be dropped there.
+window.addEventListener("dragover", (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  if (!els.libMain.contains(e.target)) e.dataTransfer.dropEffect = "none";
+});
+window.addEventListener("drop", (e) => {
+  if (isFileDrag(e)) e.preventDefault();
 });
 
 async function pumpQueue() {
@@ -1574,9 +2286,9 @@ async function pumpQueue() {
     next.status = "processing";
     next.file = null;
     renderQueue();
-    // The new document is Global and at the top of the newest-first list - and
-    // one more for the Markets tab's Global count.
-    if (!state.q && !state.who) state.offset = 0;
+    // The new document is Global: at the top of a newest-first list that
+    // includes Global ones, and one more on the sidebar's counts.
+    if (!state.q && state.sort === "uploaded_desc" && showsGlobal(state.view)) state.offset = 0;
     await Promise.all([loadDocs(), loadMarkets()]);
     // The queue advances when tick() sees this document reach a final status.
   } catch (err) {
@@ -1651,6 +2363,16 @@ function renderQueue() {
   els.queueClearBtn.disabled = !items.some((q) => isTerminal(q.status));
 }
 
+function setTrayOpen(open) {
+  state.trayOpen = open;
+  els.queueBody.hidden = !open;
+  els.queue.classList.toggle("is-collapsed", !open);
+  els.queueToggle.setAttribute("aria-expanded", open ? "true" : "false");
+  els.queueToggle.setAttribute("aria-label", t(open ? "dashboard.hideUploads" : "dashboard.showUploads"));
+}
+
+els.queueToggle.addEventListener("click", () => setTrayOpen(!state.trayOpen));
+
 els.queueClearBtn.addEventListener("click", () => {
   state.queue = state.queue.filter((q) => !isTerminal(q.status));
   renderQueue();
@@ -1711,18 +2433,35 @@ document.addEventListener("visibilitychange", () => {
 // what the page built itself. Unsaved choices in the editors survive it.
 
 document.addEventListener("langchange", () => {
-  renderMarkets();
-  renderWhoFilter();
+  renderRail();
+  renderViewHead();
   renderDocs();
   renderQueue();
+  setTrayOpen(state.trayOpen);
   detailEditor.render();
   dialogEditor.render();
   if (state.detail) refreshDetailMeta(state.detail);
   if (els.groupDialog.open) renderGroupChecklist();
-  if (els.previewDialog.open) renderPreviewDialogMeta();
+  if (els.countryDialog.open) renderCountryResults();
 });
 
 // --- Start -----------------------------------------------------------------------
 
-showView();
-loadMarkets().then(loadDocs);
+function paintIcons() {
+  els.railClose.append(icon("close"));
+  els.newGroupBtn.append(icon("plus"));
+  els.addCountryBtn.append(icon("plus"));
+  els.searchIcon.append(icon("search"));
+  els.uploadIcon.append(icon("upload"));
+  els.uploadOptionsBtn.append(icon("chevron"));
+  els.dropzoneIcon.append(icon("upload"));
+  els.detailClose.append(icon("close"));
+  els.bulkClearBtn.append(icon("close"));
+  els.trayIcon.append(icon("upload"));
+  els.queueToggle.append(icon("chevron"));
+}
+
+paintIcons();
+loadSort();
+renderSortHeaders();
+loadMarkets().finally(applyRoute);
