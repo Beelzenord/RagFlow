@@ -64,7 +64,17 @@ ENTRA_LOGOUT_URL = "/.auth/logout"
 # /api/me is public so the UI can always find out where to send someone to sign
 # in; it names no user unless the request is already authenticated.
 PUBLIC_PATHS = frozenset(
-    {"/healthz", "/login", "/api/login", "/api/me", "/styles.css", "/favicon.ico"}
+    {
+        "/healthz",
+        "/login",
+        "/api/login",
+        "/api/me",
+        "/styles.css",
+        "/favicon.ico",
+        # The sign-in page is translated too, so it needs these before sign-in.
+        "/lang.js",
+        "/strings.js",
+    }
 )
 
 # Session field holding the role. Named "admin" from before roles existed;

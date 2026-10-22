@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Apply 01-extensions.sql then 02-schema.sql to a fresh Flexible Server database.
-# 03 and 04 are upgrades for an old local volume — 02 already has those objects.
+# Apply 01-extensions.sql, 02-schema.sql and 05-markets.sql to a Flexible Server
+# database. 03 and 04 are upgrades for an old local volume — 02 already has those
+# objects. Every file is idempotent, so re-running this upgrades an existing
+# database too.
 
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 load_azure_env
@@ -34,13 +36,18 @@ run_sql() {
 
 run_sql "$REPO_ROOT/db/migrations/01-extensions.sql"
 run_sql "$REPO_ROOT/db/migrations/02-schema.sql"
+run_sql "$REPO_ROOT/db/migrations/05-markets.sql"
 
-echo "→ verify extensions + columns"
+echo "→ verify extensions, columns and market tables"
 VERIFY='SELECT extname FROM pg_extension ORDER BY 1;
 SELECT column_name, data_type
   FROM information_schema.columns
  WHERE table_name = '\''document_chunks'\''
    AND column_name IN ('\''embedding'\'','\''content_tsv'\'')
+ ORDER BY 1;
+SELECT tablename
+  FROM pg_tables
+ WHERE tablename IN ('\''markets'\'','\''market_groups'\'','\''market_group_members'\'','\''document_audience'\'')
  ORDER BY 1;'
 
 if az postgres flexible-server execute \

@@ -37,6 +37,11 @@ log = logging.getLogger("web.voice")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
 ELEVENLABS_VOICE_ID_SV = os.environ.get("ELEVENLABS_VOICE_ID_SV", "kPdGSxhZAqy4bmPAf9iJ")
+# Optional. The v2.5 models speak these languages in any voice once
+# language_code pins it, so without a dedicated voice the default one is used.
+ELEVENLABS_VOICE_ID_NB = os.environ.get("ELEVENLABS_VOICE_ID_NB", "") or ELEVENLABS_VOICE_ID
+ELEVENLABS_VOICE_ID_FI = os.environ.get("ELEVENLABS_VOICE_ID_FI", "") or ELEVENLABS_VOICE_ID
+ELEVENLABS_VOICE_ID_DA = os.environ.get("ELEVENLABS_VOICE_ID_DA", "") or ELEVENLABS_VOICE_ID
 # Only the *_v2_5 models accept language_code; eleven_multilingual_v2 ignores it
 # and infers the language from the text, which is how a Swedish answer ends up
 # read with English vowels.
@@ -47,10 +52,40 @@ ELEVENLABS_WS_URL = os.environ.get(
     "ELEVENLABS_WS_URL", "wss://api.elevenlabs.io"
 ).rstrip("/")
 
+# Keyed by the interface's language codes (static/lang.js), which voice follows.
 ELEVENLABS_VOICES: dict[str, str] = {
     "en": ELEVENLABS_VOICE_ID,
     "sv": ELEVENLABS_VOICE_ID_SV,
+    "nb": ELEVENLABS_VOICE_ID_NB,
+    "fi": ELEVENLABS_VOICE_ID_FI,
+    "da": ELEVENLABS_VOICE_ID_DA,
 }
+
+# The interface says "nb" because its dictionary is Bokmål; ElevenLabs knows the
+# language as plain Norwegian.
+_ELEVENLABS_CODES = {"nb": "no"}
+
+# What a language can arrive as - from the browser, or from Scribe, which may
+# report ISO 639-3 ("swe") as readily as 639-1 ("sv") - mapped to our codes.
+_LANGUAGE_ALIASES = {
+    "en": "en", "eng": "en",
+    "sv": "sv", "swe": "sv",
+    "nb": "nb", "nn": "nb", "no": "nb", "nob": "nb", "nno": "nb", "nor": "nb",
+    "fi": "fi", "fin": "fi",
+    "da": "da", "dan": "da",
+}
+
+
+def normalize_lang(value: str | None) -> str | None:
+    """One of the codes in ELEVENLABS_VOICES, or None for anything else."""
+    if not isinstance(value, str):
+        return None
+    base = value.strip().lower().replace("_", "-").split("-")[0]
+    return _LANGUAGE_ALIASES.get(base)
+
+
+def elevenlabs_code(lang: str) -> str:
+    return _ELEVENLABS_CODES.get(lang, lang)
 
 # Raw 16-bit signed little-endian mono. Chosen over mp3 because MediaSource
 # support for streamed mp3 is uneven across browsers, while PCM can be handed
@@ -228,7 +263,7 @@ async def transcribe(
     files = {"file": (filename or "audio.webm", audio, content_type or "audio/webm")}
     data: dict[str, str] = {"model_id": ELEVENLABS_STT_MODEL}
     if lang:
-        data["language_code"] = lang.lower()
+        data["language_code"] = elevenlabs_code(normalize_lang(lang) or lang.lower())
 
     resp = await http.post(
         f"{ELEVENLABS_BASE_URL}/v1/speech-to-text",
@@ -264,8 +299,9 @@ def _ws_url(voice_id: str, lang: str | None) -> str:
         "apply_text_normalization=auto",
         f"inactivity_timeout={WS_INACTIVITY_TIMEOUT}",
     ]
-    if lang and lang.lower() in ELEVENLABS_VOICES:
-        params.append(f"language_code={lang.lower()}")
+    code = normalize_lang(lang)
+    if code:
+        params.append(f"language_code={elevenlabs_code(code)}")
     return f"{ELEVENLABS_WS_URL}/v1/text-to-speech/{voice_id}/stream-input?" + "&".join(params)
 
 
@@ -280,6 +316,7 @@ async def run_turn(
     lang: str | None,
     document_id: str | None,
     history: list[dict[str, str]] | None,
+    market: str | None = None,
 ) -> AsyncIterator[bytes]:
     """Drive one spoken turn, yielding NDJSON lines.
 
@@ -312,15 +349,15 @@ async def run_turn(
     # positive instead of looking like a failed recording.
     if is_junk_transcript(transcript):
         log.info("discarded non-speech transcript: %r", transcript[:80])
-        yield ndjson({"type": "error", "message": "I didn't catch that - try again?"})
+        # The code lets the browser say this in the listener's language.
+        yield ndjson({"type": "error", "code": "no_speech", "message": "I didn't catch that - try again?"})
         return
 
     # Scribe reports what it heard, but not always as the two-letter code the
-    # voice map is keyed on, so an unrecognised value is treated as unknown
-    # rather than passed on as if it were a language we can pin.
-    if detected and detected.lower() not in ELEVENLABS_VOICES:
-        detected = None
-    speak_lang = (lang or detected or "").lower() or None
+    # voice map is keyed on ("swe" as often as "sv"), so it is normalised, and an
+    # unrecognised value is treated as unknown rather than passed on as if it
+    # were a language we can pin.
+    speak_lang = normalize_lang(lang) or normalize_lang(detected)
     yield ndjson({"type": "transcript", "text": transcript, "lang": speak_lang})
 
     payload: dict[str, Any] = {"question": transcript, "voice": True}
@@ -328,6 +365,8 @@ async def run_turn(
         payload["lang"] = speak_lang
     if document_id:
         payload["document_id"] = document_id
+    if market:
+        payload["market"] = market
     if history:
         payload["history"] = history
 

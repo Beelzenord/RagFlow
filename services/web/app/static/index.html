@@ -15,14 +15,15 @@
       }
     })();
   </script>
+  <script src="/lang.js"></script>
+  <script src="/strings.js"></script>
 </head>
-<body>
+<body data-page="chat">
   <header class="topbar">
     <div class="topbar-brand">
       <a class="brand-logo" href="/" aria-label="Rahmqvist"></a>
       <h1>Rahmqvist Assistant</h1>
-      <span class="hint hint-admin">Upload documents, watch them index, then ask questions.</span>
-      <span class="hint hint-reader">How can we help? Just ask.</span>
+      <span class="hint" data-i18n="chat.hint">How can we help? Just ask.</span>
     </div>
     <button
       type="button"
@@ -36,67 +37,34 @@
         <span class="theme-toggle-thumb"></span>
       </span>
       <span class="theme-toggle-text">
-        <span class="theme-label-dark">Dark</span>
-        <span class="theme-label-light">Light</span>
+        <span class="theme-label-dark" data-i18n="common.themeDark">Dark</span>
+        <span class="theme-label-light" data-i18n="common.themeLight">Light</span>
       </span>
     </button>
     <span id="user-badge" class="user-badge" hidden></span>
-    <button type="button" id="logout-btn" class="btn-secondary" hidden>Log out</button>
+    <button type="button" id="logout-btn" class="btn-secondary" hidden data-i18n="common.logout">Log out</button>
   </header>
 
   <main class="grid">
-    <aside class="sidebar" id="sidebar">
-    <section class="panel panel-collapsible" id="upload-panel">
-      <details id="upload-details" open>
-        <summary class="panel-summary"><span>1. Upload</span></summary>
-      <form id="upload-form">
-        <label class="field">
-          <span>Files</span>
-          <input type="file" id="file-input" multiple required />
-        </label>
-        <label class="field">
-          <span>Collection (optional)</span>
-          <input type="text" id="collection-input" placeholder="e.g. handbook" />
-        </label>
-        <button type="submit" id="upload-btn">Add to queue</button>
-        <div class="progress" id="upload-progress" hidden aria-hidden="true">
-          <div class="progress-bar" id="upload-bar"></div>
-        </div>
-        <p class="status" id="upload-status" aria-live="polite"></p>
-      </form>
-      </details>
-    </section>
-
-    <section class="panel" id="queue-panel" hidden>
-      <h2>Upload queue</h2>
-      <div class="queue-summary" id="queue-summary"></div>
-      <ul id="queue-list" class="queue"></ul>
-      <button type="button" id="queue-clear-btn" class="btn-secondary">Clear finished</button>
-    </section>
-
-    <section class="panel panel-collapsible" id="docs-panel">
-      <details id="docs-details" open>
-        <summary class="panel-summary"><span>2. Documents</span></summary>
-      <p class="muted" id="docs-empty">No documents yet. Upload one to get started.</p>
-      <ul id="docs-list" class="docs"></ul>
-      </details>
-    </section>
-    </aside>
-
     <section class="panel chat" id="chat-panel">
-      <h2>3. Ask</h2>
       <div class="chat-controls">
-        <label class="field inline">
-          <span>Scope</span>
-          <select id="scope-select">
-            <option value="">All completed documents</option>
+        <label class="field inline" id="market-field" hidden>
+          <span data-i18n="chat.answersFor">Answers for</span>
+          <select id="market-select">
+            <option value="" data-i18n="chat.allMarkets">All markets</option>
           </select>
         </label>
-        <label class="field inline checkbox">
-          <input type="checkbox" id="show-sources" checked />
-          <span>Show source details</span>
+        <label class="field inline admin-only">
+          <span data-i18n="chat.searchIn">Search in</span>
+          <select id="scope-select">
+            <option value="" data-i18n="chat.allDocuments">All documents</option>
+          </select>
         </label>
-        <button type="button" id="new-chat-btn" class="btn-secondary">New chat</button>
+        <label class="field inline checkbox admin-only">
+          <input type="checkbox" id="show-sources" checked />
+          <span data-i18n="chat.showSources">Show source details</span>
+        </label>
+        <button type="button" id="new-chat-btn" class="btn-secondary" data-i18n="chat.newChat">New chat</button>
         <div class="voice-controls" id="voice-controls" hidden>
           <button type="button" id="mic-btn" class="mic-btn" aria-label="Ask by voice">
             <svg class="icon-mic" viewBox="0 0 24 24" aria-hidden="true">
@@ -108,16 +76,19 @@
               <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
             </svg>
           </button>
-          <select id="voice-lang" aria-label="Voice language">
+          <select id="voice-lang" aria-label="Voice language" data-i18n-aria-label="voice.language">
             <option value="en">English</option>
             <option value="sv">Svenska</option>
+            <option value="nb">Norsk</option>
+            <option value="fi">Suomi</option>
+            <option value="da">Dansk</option>
           </select>
           <span id="voice-status" class="voice-status" role="status" aria-live="polite"></span>
         </div>
       </div>
       <div id="chat-log" class="chat-log" aria-live="polite"></div>
       <form id="chat-form" class="chat-form">
-        <textarea id="question-input" rows="1" placeholder="What can I help you with?"></textarea>
+        <textarea id="question-input" rows="1" placeholder="What can I help you with?" data-i18n-placeholder="chat.placeholder"></textarea>
         <button type="submit" id="ask-btn" class="send-btn" aria-label="Send">
           <svg class="icon-send" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 5v14M12 5l-6 6M12 5l6 6" fill="none" stroke="currentColor"
@@ -128,10 +99,11 @@
           </svg>
         </button>
       </form>
-      <p class="composer-hint">Enter to send, Shift+Enter for a new line</p>
+      <p class="composer-hint" data-i18n="chat.composerHint">Enter to send, Shift+Enter for a new line</p>
     </section>
   </main>
 
+  <script src="/shell.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

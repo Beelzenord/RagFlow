@@ -6,6 +6,7 @@ ship to the browser.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -16,7 +17,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -32,6 +33,10 @@ SERVICE_API_KEY = os.environ.get("SERVICE_API_KEY", "")
 HTTP_TIMEOUT = float(os.environ.get("WEB_HTTP_TIMEOUT", "120"))
 
 STATIC_DIR = Path(__file__).parent / "static"
+# Deliberately outside STATIC_DIR: everything in there is served to any
+# signed-in visitor, readers included. These files are only reachable through
+# the admin-gated routes below.
+ADMIN_DIR = Path(__file__).parent / "admin"
 
 # A browser holding a stale app.js keeps polling and never reacts to the 401 the
 # login gate returns, so the console looks broken instead of asking for a login.
@@ -165,6 +170,20 @@ def _auth_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
     return headers
 
 
+async def _forward(request: Request, method: str, url: str, **kwargs: Any) -> JSONResponse:
+    """Send one call to an internal service and hand back its status and body.
+
+    Refusals pass through unchanged - a 409 explaining why a country can't be
+    removed is the message the dashboard shows.
+    """
+    client: httpx.AsyncClient = request.app.state.http
+    try:
+        resp = await client.request(method, url, headers=_auth_headers(), **kwargs)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
+    return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
+
+
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
@@ -203,9 +222,12 @@ async def api_documents(
     request: Request,
     collection: str | None = None,
     user_id: str | None = None,
+    q: str | None = None,
+    who: str | None = None,
     limit: int | None = None,
+    offset: int | None = None,
 ) -> JSONResponse:
-    """The corpus inventory, for the admin sidebar and its status polling.
+    """The corpus inventory, for the dashboard and the admin's document picker.
 
     Admin-only because the filenames are the inventory: a reader is told which
     documents an answer came from, not everything that was ever uploaded.
@@ -215,8 +237,14 @@ async def api_documents(
         params["collection"] = collection
     if user_id:
         params["user_id"] = user_id
+    if q:
+        params["q"] = q
+    if who:
+        params["who"] = who
     if limit is not None:
         params["limit"] = limit
+    if offset is not None:
+        params["offset"] = offset
     client: httpx.AsyncClient = request.app.state.http
     try:
         resp = await client.get(
@@ -257,13 +285,17 @@ async def api_document_delete(document_id: UUID, request: Request) -> JSONRespon
 
 
 @app.get("/api/documents/{document_id}/file")
-async def api_document_file(document_id: UUID, request: Request) -> StreamingResponse:
-    """Proxy the original upload from ingestion so the browser can download it."""
+async def api_document_file(document_id: UUID, request: Request, inline: bool = False) -> StreamingResponse:
+    """Proxy the original upload from ingestion so the browser can download it,
+    or - with inline - show a PDF or JPEG in the dashboard's preview. Ingestion
+    decides which types may be inline; everything else stays a download."""
     client: httpx.AsyncClient = request.app.state.http
     url = f"{INGESTION_URL}/documents/{document_id}/file"
     try:
         upstream = await client.send(
-            client.build_request("GET", url, headers=_auth_headers()),
+            client.build_request(
+                "GET", url, headers=_auth_headers(), params={"inline": "true"} if inline else None
+            ),
             stream=True,
         )
     except httpx.HTTPError as exc:
@@ -278,7 +310,8 @@ async def api_document_file(document_id: UUID, request: Request) -> StreamingRes
         raise HTTPException(upstream.status_code, msg)
 
     media_type = upstream.headers.get("content-type") or "application/octet-stream"
-    out_headers: dict[str, str] = {}
+    # An uploaded file must never be sniffed into something the browser runs.
+    out_headers: dict[str, str] = {"x-content-type-options": "nosniff"}
     cd = upstream.headers.get("content-disposition")
     if cd:
         out_headers["content-disposition"] = cd
@@ -299,6 +332,175 @@ async def api_document_file(document_id: UUID, request: Request) -> StreamingRes
     return StreamingResponse(stream_body(), media_type=media_type, headers=out_headers)
 
 
+# --- Markets and who each document is for ------------------------------------
+# Bodies are checked properly by ingestion, which owns the rules; these models
+# only keep the proxy from forwarding arbitrary JSON.
+
+
+class AudienceBody(BaseModel):
+    everyone: bool
+    countries: list[str] = Field(default_factory=list, max_length=300)
+    groups: list[str] = Field(default_factory=list, max_length=100)
+
+
+class BulkAudienceBody(AudienceBody):
+    document_ids: list[UUID] = Field(..., min_length=1, max_length=500)
+
+
+class CountryBody(BaseModel):
+    code: str = Field(..., min_length=2, max_length=2)
+
+
+class GroupBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=60)
+    members: list[str] = Field(..., max_length=300)
+
+
+def _country_code(code: str) -> str:
+    value = code.strip().upper()
+    if len(value) != 2 or not value.isascii() or not value.isalpha():
+        raise HTTPException(400, f"{code!r} is not a two-letter country code")
+    return value
+
+
+@app.put("/api/documents/audience", dependencies=[Depends(require_admin)])
+async def api_documents_audience(body: BulkAudienceBody, request: Request) -> JSONResponse:
+    return await _forward(
+        request, "PUT", f"{INGESTION_URL}/documents/audience", json=body.model_dump(mode="json")
+    )
+
+
+@app.put("/api/documents/{document_id}/audience", dependencies=[Depends(require_admin)])
+async def api_document_audience(document_id: UUID, body: AudienceBody, request: Request) -> JSONResponse:
+    return await _forward(
+        request, "PUT", f"{INGESTION_URL}/documents/{document_id}/audience", json=body.model_dump()
+    )
+
+
+@app.get("/api/markets")
+async def api_markets(request: Request) -> JSONResponse:
+    """The markets, for the chat's "Answers for" picker and the dashboard.
+
+    Open to readers, because the picker is theirs too - but trimmed to the
+    country names. Group make-up and per-country document counts describe the
+    corpus, which is admin knowledge.
+    """
+    resp = await _forward(request, "GET", f"{INGESTION_URL}/markets")
+    if auth.is_admin(request) or resp.status_code != 200:
+        return resp
+    full = json.loads(resp.body)
+    countries = [{"code": c["code"], "name": c["name"]} for c in full.get("countries", [])]
+    return JSONResponse({"countries": countries})
+
+
+@app.get("/api/markets/catalogue", dependencies=[Depends(require_admin)])
+async def api_market_catalogue(request: Request) -> JSONResponse:
+    return await _forward(request, "GET", f"{INGESTION_URL}/markets/catalogue")
+
+
+@app.post("/api/markets/countries", dependencies=[Depends(require_admin)])
+async def api_add_country(body: CountryBody, request: Request) -> JSONResponse:
+    code = _country_code(body.code)
+    return await _forward(request, "POST", f"{INGESTION_URL}/markets/countries", json={"code": code})
+
+
+@app.delete("/api/markets/countries/{code}", dependencies=[Depends(require_admin)])
+async def api_remove_country(code: str, request: Request) -> JSONResponse:
+    return await _forward(request, "DELETE", f"{INGESTION_URL}/markets/countries/{_country_code(code)}")
+
+
+@app.post("/api/markets/groups", dependencies=[Depends(require_admin)])
+async def api_create_group(body: GroupBody, request: Request) -> JSONResponse:
+    return await _forward(request, "POST", f"{INGESTION_URL}/markets/groups", json=body.model_dump())
+
+
+@app.put("/api/markets/groups/{group_id}", dependencies=[Depends(require_admin)])
+async def api_update_group(group_id: UUID, body: GroupBody, request: Request) -> JSONResponse:
+    return await _forward(
+        request, "PUT", f"{INGESTION_URL}/markets/groups/{group_id}", json=body.model_dump()
+    )
+
+
+@app.delete("/api/markets/groups/{group_id}", dependencies=[Depends(require_admin)])
+async def api_delete_group(group_id: UUID, request: Request) -> JSONResponse:
+    return await _forward(request, "DELETE", f"{INGESTION_URL}/markets/groups/{group_id}")
+
+
+# --- Dashboard ------------------------------------------------------------------
+# To a reader the dashboard does not exist: the page sends them back to the chat
+# and its script is a plain 404, so nothing about it can be read off the server.
+
+
+@app.get("/dashboard")
+async def dashboard_page(request: Request) -> Any:
+    if not auth.is_admin(request):
+        return RedirectResponse("/", status_code=302)
+    return FileResponse(ADMIN_DIR / "dashboard.html", headers=NO_CACHE)
+
+
+@app.get("/dashboard/dashboard.js")
+async def dashboard_script(request: Request) -> Any:
+    if not auth.is_admin(request):
+        raise HTTPException(404, "Not Found")
+    return FileResponse(ADMIN_DIR / "dashboard.js", media_type="text/javascript", headers=NO_CACHE)
+
+
+# --- Interface languages ----------------------------------------------------------
+# One dictionary per language in app/locales; en.json is the full set of keys.
+# Every language travels in one script, because the choice is made in the
+# browser (static/lang.js) and switching must not need another request.
+
+LOCALES_DIR = Path(__file__).parent / "locales"
+LANGUAGES = ("en", "sv", "nb", "fi", "da")
+# Wording that would tell a reader the Dashboard exists: its page switch and
+# everything on it. Only admins are sent these.
+ADMIN_KEY_PREFIXES = ("nav.", "dashboard.")
+
+
+def _load_locales() -> dict[str, dict[str, Any]]:
+    locales = {
+        lang: json.loads((LOCALES_DIR / f"{lang}.json").read_text(encoding="utf-8")) for lang in LANGUAGES
+    }
+    # A missing entry falls back to English in the browser, so it is a warning
+    # here; tests/test_i18n.py is what keeps the dictionaries complete.
+    for lang, entries in locales.items():
+        missing = sorted(set(locales["en"]) - set(entries))
+        if missing:
+            log.warning("locale %s lacks %d keys, e.g. %s", lang, len(missing), missing[:3])
+    return locales
+
+
+def _strings_script(locales: dict[str, dict[str, Any]], admin: bool) -> tuple[bytes, str]:
+    payload = {
+        lang: {k: v for k, v in entries.items() if admin or not k.startswith(ADMIN_KEY_PREFIXES)}
+        for lang, entries in locales.items()
+    }
+    body = ("Lang.add(" + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + ");\n").encode()
+    return body, '"' + hashlib.sha256(body).hexdigest()[:20] + '"'
+
+
+_LOCALES = _load_locales()
+_STRINGS = {admin: _strings_script(_LOCALES, admin) for admin in (False, True)}
+
+
+@app.get("/strings.js")
+async def strings_script(request: Request) -> Response:
+    """The dictionaries for static/lang.js.
+
+    Public, so the sign-in page can be translated too - nothing in it describes
+    the corpus. A reader's copy leaves out the Dashboard's wording; the two
+    copies have different ETags, so a role change is never answered from cache.
+    """
+    body, etag = _STRINGS[auth.is_admin(request)]
+    headers = {"etag": etag, "cache-control": "no-cache"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(body, media_type="text/javascript", headers=headers)
+
+
+MARKET_PATTERN = r"^[A-Z]{2}$"
+
+
 class ChatTurn(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(..., min_length=1, max_length=4000)
@@ -312,6 +514,9 @@ class QueryBody(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=50)
     voice: bool | None = None
     lang: str | None = None
+    # "Answers for": the asker's market, an ISO country code. Steers which
+    # documents are searched; it is a preference, not a permission.
+    market: str | None = Field(default=None, pattern=MARKET_PATTERN)
     # Prior turns, oldest first, excluding the current question.
     history: list[ChatTurn] | None = Field(default=None, max_length=12)
 
@@ -387,6 +592,7 @@ async def api_voice_ask(
     file: UploadFile = File(...),
     lang: str | None = Form(default=None),
     document_id: str | None = Form(default=None),
+    market: str | None = Form(default=None, pattern=MARKET_PATTERN),
     history: str | None = Form(default=None),
 ) -> StreamingResponse:
     """One spoken turn: audio in, NDJSON (transcript, answer, audio) out.
@@ -422,6 +628,7 @@ async def api_voice_ask(
             lang=lang,
             document_id=document_id,
             history=turns,
+            market=market,
         ),
         media_type="application/x-ndjson",
         headers={"cache-control": "no-store"},

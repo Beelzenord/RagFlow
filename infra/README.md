@@ -47,7 +47,7 @@ Signing in gets someone in; an **app role** decides what they may do. Two roles,
 
 | Role | May |
 |---|---|
-| `Admin` | Upload, delete, browse the documents list, scope a question to one document, see source details |
+| `Admin` | Everything on the Dashboard (upload, preview, delete, decide who each document is for, manage markets), aim a question at one document, see source details |
 | `Reader` | Ask questions and download the documents an answer cites — nothing that reveals the rest of the corpus |
 
 Define them once — Entra > App registrations > the app > **App roles** > Create app role — with **Allowed member types = Users/Groups** and the value spelled exactly `Admin` and `Reader`. Then Enterprise applications > the same app > **Users and groups** and assign your admin group to `Admin` and everyone else to `Reader`.
@@ -59,7 +59,7 @@ Two things that surprise people:
 - **Assigning a *group* to an app role needs an Entra ID P1 licence.** Without one, assign individual users, or keep everyone at the default and grant `Admin` per person.
 - **A new role is not retroactive.** Anyone already signed in keeps the token they have, so they must sign out (`/.auth/logout`) and back in before it takes effect.
 
-An account that holds neither role can read and nothing more, so forgetting an assignment is never an accidental promotion — the web app logs the name it saw. Upload, delete and the documents list all check the role themselves; the UI hiding a control only stops mistakes, not requests. If the roles must be named differently, set `ENTRA_ADMIN_ROLE` and `ENTRA_READER_ROLE` in `azure.env`.
+An account that holds neither role can read and nothing more, so forgetting an assignment is never an accidental promotion — the web app logs the name it saw. Upload, delete, the documents list, the Dashboard and every markets change all check the role themselves; the UI hiding a control only stops mistakes, not requests. If the roles must be named differently, set `ENTRA_ADMIN_ROLE` and `ENTRA_READER_ROLE` in `azure.env`.
 
 ## Local vs Azure env (same images)
 
@@ -92,7 +92,7 @@ If the UI loads but every action fails:
 
 Sign-in gates the browser only. `ingestion` and `query` stay internal and keep their own `x-api-key` check.
 
-Everyone who can sign in still sees the same corpus: Entra decides *who gets in*, not which documents they may read. Per-group document scoping is a separate change.
+Everyone who can sign in still sees the same corpus: Entra decides *who gets in*, not which documents they may read. Markets (see the main README) only steer which documents an answer draws on. They are a preference each person picks in the chat, not access control.
 
 ## Cold start
 
@@ -163,4 +163,4 @@ anyway, but billed at the active rate rather than the cheaper idle rate a
 
 ## What these scripts do not do
 
-They do not apply `03`/`04` (already in `02` on a fresh database), do not copy your local corpus, do not create n8n/Redis/Azure OpenAI, and do not add GitHub Actions. They do not create the Entra app registration or the access group either — that part is the portal steps above; the scripts only verify Easy Auth is on.
+They do not apply `03`/`04` (already in `02` on a fresh database). They do apply `05` (markets), which is safe to re-run, so running `migrate.sh` again upgrades a database that predates it. They do not copy your local corpus, do not create n8n/Redis/Azure OpenAI, and do not add GitHub Actions. They do not create the Entra app registration or the access group either — that part is the portal steps above; the scripts only verify Easy Auth is on.

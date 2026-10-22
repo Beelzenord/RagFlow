@@ -1,32 +1,27 @@
-// Rahmqvist Assistant - vanilla JS frontend.
-// The server (ingestion service) is the source of truth for the documents
-// list. localStorage is kept only as a paint cache so reloads don't flash an
-// empty list before the first /api/documents response lands.
+// Rahmqvist Assistant - the chat page. Vanilla JS.
+// The topbar (theme, sign-in, the admin's Dashboard switch) lives in shell.js;
+// uploading and organising documents lives on the Dashboard.
 
-const STORAGE_KEY = "rag.docs.v1";
+// Left behind by the old sidebar's documents list, which cached every filename
+// in the browser. Cleared on load so a reader never inherits one.
+const LEGACY_DOCS_KEY = "rag.docs.v1";
 const SHOW_SOURCES_KEY = "rag.showSources.v1";
-const THEME_KEY = "rag.theme.v1";
-const REFRESH_MS = 5000;
+const MARKET_KEY = "rag.market.v1";
 // Follow-ups are resolved server-side against these turns, so the window is a
 // tradeoff between context and prompt cost. 6 turns ~ 3 exchanges.
 const MAX_HISTORY_TURNS = 6;
 const MAX_TURN_CHARS = 1500;
-const POLL_MS = 2000;
 const VOICE_LANG_KEY = "rag.voiceLang.v1";
 // Enough of a cushion to absorb a network hiccup between chunks without being
 // audible as a delay before the answer starts.
 const AUDIO_LEAD_SECONDS = 0.06;
 
 const state = {
-  docs: loadDocsCache(),
-  pollers: new Map(),
-  refreshHandle: null,
-  pendingDeletes: new Set(),
-  lastUploadId: null,
-  queue: [],
-  queueBusy: false,
-  nextQid: 1,
   turns: [],
+  // What the two pickers were last filled from, so a language switch can
+  // relabel them without asking the server again.
+  marketCountries: [],
+  pickerDocs: [],
   // Set from /api/me. Starts false so a reader is never briefly offered a
   // control the server would refuse; the server checks again regardless.
   canWrite: false,
@@ -60,103 +55,27 @@ const voice = {
 };
 
 const els = {
-  uploadForm: document.getElementById("upload-form"),
-  fileInput: document.getElementById("file-input"),
-  collectionInput: document.getElementById("collection-input"),
-  uploadBtn: document.getElementById("upload-btn"),
-  uploadStatus: document.getElementById("upload-status"),
-  uploadProgress: document.getElementById("upload-progress"),
-  uploadBar: document.getElementById("upload-bar"),
-  docsList: document.getElementById("docs-list"),
-  docsEmpty: document.getElementById("docs-empty"),
+  marketField: document.getElementById("market-field"),
+  marketSelect: document.getElementById("market-select"),
   scopeSelect: document.getElementById("scope-select"),
   showSources: document.getElementById("show-sources"),
   chatLog: document.getElementById("chat-log"),
   chatForm: document.getElementById("chat-form"),
   questionInput: document.getElementById("question-input"),
   askBtn: document.getElementById("ask-btn"),
-  queuePanel: document.getElementById("queue-panel"),
-  queueList: document.getElementById("queue-list"),
-  queueSummary: document.getElementById("queue-summary"),
-  queueClearBtn: document.getElementById("queue-clear-btn"),
-  themeToggle: document.getElementById("theme-toggle"),
   newChatBtn: document.getElementById("new-chat-btn"),
-  logoutBtn: document.getElementById("logout-btn"),
-  userBadge: document.getElementById("user-badge"),
   voiceControls: document.getElementById("voice-controls"),
   micBtn: document.getElementById("mic-btn"),
   voiceLang: document.getElementById("voice-lang"),
   voiceStatus: document.getElementById("voice-status"),
 };
 
-// Where to send the browser when the server stops recognising it. Overwritten
-// by /api/me, because with Microsoft sign-in the destination belongs to the
-// platform ("/.auth/login/aad") rather than to this app.
-let loginUrl = "/login";
+const bounceIfLoggedOut = Shell.bounceIfLoggedOut;
 
-// The session can end mid-visit, after which every /api call answers 401. Send
-// the tab to the sign-in page instead of painting "HTTP 401" into the docs
-// list, the upload queue and the chat log.
-function bounceIfLoggedOut(status) {
-  if (status !== 401) return false;
-  location.href = loginUrl;
-  return true;
-}
-
-function loadDocsCache() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveDocsCache() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.docs));
-  } catch {
-    /* storage full / disabled - ignore */
-  }
-}
-
-// A reader must not be told what the corpus holds, and the cache outlives the
-// visit that filled it: the same browser signed in as an admin yesterday.
-function clearDocsCache() {
-  state.docs = [];
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    /* storage disabled - ignore */
-  }
-}
-
-function normalizeDoc(d) {
-  return {
-    id: d.id,
-    status: d.status,
-    chunk_count: d.chunk_count,
-    error_message: d.error_message,
-    filename: d.original_filename || d.filename || d.id,
-    collection: d.collection,
-  };
-}
-
-async function refreshDocs() {
-  try {
-    const resp = await fetch("/api/documents");
-    if (bounceIfLoggedOut(resp.status)) return;
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
-    const list = Array.isArray(data?.documents) ? data.documents : [];
-    state.docs = list.map(normalizeDoc);
-    saveDocsCache();
-    renderDocs();
-  } catch (err) {
-    console.warn("refreshDocs failed", err);
-  }
+try {
+  localStorage.removeItem(LEGACY_DOCS_KEY);
+} catch {
+  /* storage disabled - ignore */
 }
 
 // "degraded" means indexed, but at least one page was recovered from the raw
@@ -165,222 +84,110 @@ function isIndexed(status) {
   return status === "completed" || status === "degraded";
 }
 
-function isTerminal(status) {
-  return isIndexed(status) || status === "failed";
-}
-
-function renderDocs() {
-  els.docsEmpty.style.display = state.docs.length ? "none" : "block";
-  els.docsList.innerHTML = "";
-  for (const d of state.docs) {
-    const li = document.createElement("li");
-    li.className = "doc";
-    li.dataset.id = d.id;
-
-    const row = document.createElement("div");
-    row.className = "doc-row";
-
-    const name = document.createElement("div");
-    name.className = "doc-name";
-    name.textContent = d.filename || d.id;
-
-    const actions = document.createElement("div");
-    actions.className = "doc-actions";
-
-    const badge = document.createElement("span");
-    badge.className = `badge ${d.status || "uploaded"}`;
-    badge.textContent = d.status || "uploaded";
-
-    actions.append(badge);
-    if (state.canWrite) {
-      const delBtn = document.createElement("button");
-      delBtn.type = "button";
-      delBtn.className = "btn-danger";
-      delBtn.textContent = "Delete";
-      delBtn.disabled = state.pendingDeletes.has(d.id);
-      delBtn.addEventListener("click", () => deleteDoc(d, li));
-      actions.append(delBtn);
-    }
-    row.append(name, actions);
-
-    const meta = document.createElement("div");
-    meta.className = "doc-meta";
-    const idSpan = document.createElement("span");
-    idSpan.textContent = `id: ${d.id.slice(0, 8)}...`;
-    meta.appendChild(idSpan);
-    if (d.collection) {
-      const c = document.createElement("span");
-      c.textContent = `collection: ${d.collection}`;
-      meta.appendChild(c);
-    }
-    if (typeof d.chunk_count === "number" && d.chunk_count > 0) {
-      const cc = document.createElement("span");
-      cc.textContent = `${d.chunk_count} chunks`;
-      meta.appendChild(cc);
-    }
-
-    li.append(row, meta);
-
-    if (d.status === "failed" && d.error_message) {
-      const err = document.createElement("div");
-      err.className = "doc-error";
-      err.textContent = d.error_message;
-      li.appendChild(err);
-    }
-
-    if (d.status === "degraded") {
-      const note = document.createElement("div");
-      note.className = "doc-note";
-      note.textContent =
-        "Some pages were recovered from the raw PDF text - content is complete, layout is not.";
-      li.appendChild(note);
-    }
-
-    els.docsList.appendChild(li);
+// "Search in": an admin can aim a question at one document. Filled when the
+// page loads and again whenever the tab comes back into view, so a document
+// finished on the Dashboard in another tab shows up without a reload - and
+// nothing polls.
+async function loadDocumentPicker() {
+  try {
+    const resp = await fetch("/api/documents?limit=1000");
+    if (bounceIfLoggedOut(resp.status)) return;
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    const docs = Array.isArray(data?.documents) ? data.documents : [];
+    state.pickerDocs = docs.filter((d) => isIndexed(d.status));
+    renderDocumentPicker();
+  } catch (err) {
+    console.warn("document list failed", err);
   }
-  renderScopeOptions();
 }
 
-function renderScopeOptions() {
+function renderDocumentPicker() {
   const current = els.scopeSelect.value;
-  els.scopeSelect.innerHTML = "";
   const all = document.createElement("option");
   all.value = "";
-  all.textContent = "All completed documents";
-  els.scopeSelect.appendChild(all);
-  for (const d of state.docs) {
-    if (!isIndexed(d.status)) continue;
+  all.textContent = Lang.t("chat.allDocuments");
+  const options = [all];
+  for (const d of state.pickerDocs) {
     const opt = document.createElement("option");
     opt.value = d.id;
-    opt.textContent = d.filename || d.id;
-    els.scopeSelect.appendChild(opt);
+    opt.textContent = d.original_filename || d.id;
+    options.push(opt);
   }
-  if ([...els.scopeSelect.options].some((o) => o.value === current)) {
-    els.scopeSelect.value = current;
+  els.scopeSelect.replaceChildren(...options);
+  if (options.some((o) => o.value === current)) els.scopeSelect.value = current;
+}
+
+// "Answers for": the asker's market. Answers then draw on documents for
+// everyone plus documents for that market. Remembered per browser; a market an
+// admin has since removed falls back to all markets rather than to nothing.
+function loadSavedMarket() {
+  try {
+    return localStorage.getItem(MARKET_KEY) || "";
+  } catch {
+    return "";
   }
 }
 
-async function deleteDoc(doc, liNode) {
-  const label = doc.filename || doc.id;
-  if (!confirm(`Delete "${label}"?\nThis removes the embeddings and the stored file.`)) {
+function saveMarket(code) {
+  try {
+    if (code) localStorage.setItem(MARKET_KEY, code);
+    else localStorage.removeItem(MARKET_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function loadMarketPicker() {
+  let countries = [];
+  try {
+    const resp = await fetch("/api/markets");
+    if (bounceIfLoggedOut(resp.status)) return;
+    if (resp.ok) {
+      const data = await resp.json();
+      countries = Array.isArray(data?.countries) ? data.countries : [];
+    }
+  } catch (err) {
+    console.warn("market list failed", err);
+  }
+  state.marketCountries = countries;
+  renderMarketPicker();
+}
+
+function renderMarketPicker() {
+  const countries = state.marketCountries;
+  // With no markets every document is for everyone, so there is nothing to pick.
+  if (!countries.length) {
+    els.marketField.hidden = true;
+    els.marketSelect.value = "";
     return;
   }
-  state.pendingDeletes.add(doc.id);
-  const btn = liNode?.querySelector(".btn-danger");
-  if (btn) btn.disabled = true;
-
-  let inlineErr = liNode?.querySelector(".doc-error.delete-error");
-  if (inlineErr) inlineErr.remove();
-
-  try {
-    const resp = await fetch(`/api/documents/${doc.id}`, { method: "DELETE" });
-    if (bounceIfLoggedOut(resp.status)) return;
-    if (!resp.ok) {
-      const data = await resp.json().catch(() => ({}));
-      const msg = data?.detail || data?.error || `HTTP ${resp.status}`;
-      throw new Error(msg);
-    }
-    const poller = state.pollers.get(doc.id);
-    if (poller) {
-      clearInterval(poller);
-      state.pollers.delete(doc.id);
-    }
-    await refreshDocs();
-  } catch (err) {
-    if (liNode) {
-      const e = document.createElement("div");
-      e.className = "doc-error delete-error";
-      e.textContent = `Delete failed: ${err.message}`;
-      liNode.appendChild(e);
-    }
-    if (btn) btn.disabled = false;
-  } finally {
-    state.pendingDeletes.delete(doc.id);
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = Lang.t("chat.allMarkets");
+  // Country names in the reader's language ("Sverige", "Ruotsi"), sorted by
+  // that language's rules.
+  const named = countries
+    .map((c) => ({ code: c.code, name: Lang.region(c.code, c.name) }))
+    .sort((a, b) => Lang.compare(a.name, b.name));
+  const options = [all];
+  for (const c of named) {
+    const opt = document.createElement("option");
+    opt.value = c.code;
+    opt.textContent = c.name;
+    options.push(opt);
   }
+  const current = els.marketSelect.value || loadSavedMarket();
+  els.marketSelect.replaceChildren(...options);
+  els.marketSelect.value = countries.some((c) => c.code === current) ? current : "";
+  els.marketField.hidden = false;
 }
 
-function startPolling(docId) {
-  if (state.pollers.has(docId)) return;
-  const tick = async () => {
-    try {
-      const resp = await fetch(`/api/documents/${docId}`);
-      if (bounceIfLoggedOut(resp.status)) return;
-      if (resp.status === 404) {
-        clearInterval(state.pollers.get(docId));
-        state.pollers.delete(docId);
-        await refreshDocs();
-        return;
-      }
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      const idx = state.docs.findIndex((d) => d.id === docId);
-      const merged = normalizeDoc(data);
-      if (idx === -1) {
-        state.docs.unshift(merged);
-      } else {
-        state.docs[idx] = { ...state.docs[idx], ...merged };
-      }
-      saveDocsCache();
-      renderDocs();
-      if (isTerminal(data.status)) {
-        clearInterval(state.pollers.get(docId));
-        state.pollers.delete(docId);
-        if (state.lastUploadId === docId) {
-          if (isIndexed(data.status)) {
-            const n = typeof data.chunk_count === "number" ? data.chunk_count : 0;
-            const suffix =
-              data.status === "degraded" ? " (some pages recovered from raw text)" : "";
-            setStatus(els.uploadStatus, `Done - ${n} chunks indexed${suffix}`, "ok");
-          } else {
-            const reason = data.error_message || "see document row";
-            setStatus(els.uploadStatus, `Failed: ${reason}`, "error");
-          }
-          state.lastUploadId = null;
-        }
-        const qEntry = state.queue.find((q) => q.docId === docId);
-        if (qEntry && (qEntry.status === "processing" || qEntry.status === "uploading")) {
-          qEntry.status = data.status;
-          if (typeof data.chunk_count === "number") qEntry.chunkCount = data.chunk_count;
-          if (data.status === "failed") qEntry.error = data.error_message || "processing failed";
-          renderQueue();
-          if (state.queueBusy) {
-            state.queueBusy = false;
-            pumpQueue();
-          }
-        }
-      }
-    } catch (err) {
-      console.warn("poll failed for", docId, err);
-    }
-  };
-  const handle = setInterval(tick, POLL_MS);
-  state.pollers.set(docId, handle);
-  tick();
-}
+els.marketSelect.addEventListener("change", () => saveMarket(els.marketSelect.value));
 
-function startBackgroundRefresh() {
-  stopBackgroundRefresh();
-  state.refreshHandle = setInterval(refreshDocs, REFRESH_MS);
+function currentMarket() {
+  return els.marketField.hidden ? null : els.marketSelect.value || null;
 }
-
-function stopBackgroundRefresh() {
-  if (state.refreshHandle) {
-    clearInterval(state.refreshHandle);
-    state.refreshHandle = null;
-  }
-}
-
-document.addEventListener("visibilitychange", () => {
-  // A reader has no list to keep fresh, and asking for one would put the
-  // filenames back in the browser.
-  if (!state.canWrite) return;
-  if (document.hidden) {
-    stopBackgroundRefresh();
-  } else {
-    refreshDocs();
-    startBackgroundRefresh();
-  }
-});
 
 function loadShowSources() {
   try {
@@ -413,357 +220,39 @@ function applyShowSources(on) {
   });
 })();
 
-function getTheme() {
-  try {
-    return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
-  } catch {
-    return "dark";
-  }
-}
-
-function applyTheme(theme) {
-  const t = theme === "light" ? "light" : "dark";
-  document.documentElement.setAttribute("data-theme", t);
-  if (els.themeToggle) {
-    const light = t === "light";
-    els.themeToggle.setAttribute("aria-checked", light ? "true" : "false");
-    els.themeToggle.setAttribute("aria-label", light ? "Use dark mode" : "Use light mode");
-  }
-}
-
-function saveTheme(theme) {
-  try {
-    localStorage.setItem(THEME_KEY, theme === "light" ? "light" : "dark");
-  } catch {
-    /* ignore */
-  }
-}
-
-(function initTheme() {
-  applyTheme(getTheme());
-  if (!els.themeToggle) return;
-  els.themeToggle.addEventListener("click", () => {
-    const next = getTheme() === "light" ? "dark" : "light";
-    saveTheme(next);
-    applyTheme(next);
-  });
-})();
-
-// What the console becomes once the role is known. A reader is left with the
-// conversation: no documents list, nothing polling for one, no filenames cached
-// from an earlier visit, and no source details, because the toggle that governs
-// them is an admin control they cannot reach.
-function applyRole() {
-  if (!state.canWrite) {
-    stopBackgroundRefresh();
-    clearDocsCache();
-    renderDocs();
-    applyShowSources(false);
-    return;
-  }
-  renderDocs();
-  refreshDocs();
-  startBackgroundRefresh();
-  for (const d of state.docs) {
-    if (!isTerminal(d.status)) startPolling(d.id);
-  }
-}
-
-// The topbar cannot work out who is signed in on its own: with Microsoft
-// sign-in the identity arrives in a request header the page never sees, and
-// signing out has to go through the platform rather than this app.
+// What the page becomes once the role is known. A reader is left with the
+// conversation: no document picker, nothing asking the server for filenames,
+// and no source details, because the toggle that governs them is an admin
+// control they cannot reach.
 async function initSession() {
-  let info = {};
-  try {
-    const resp = await fetch("/api/me");
-    if (resp.ok) info = await resp.json();
-  } catch (err) {
-    console.warn("session lookup failed", err);
-  }
-
-  if (info.login_url) loginUrl = info.login_url;
-
-  if (info.user && els.userBadge) {
-    els.userBadge.textContent = info.user;
-    els.userBadge.hidden = false;
-  }
-
-  // Before any early return below: everything to do with documents waits for
-  // this answer, so a reader's browser never asks for the corpus at all.
+  const info = await Shell.session;
   state.canWrite = info.can_write === true;
-  document.body.classList.toggle("can-write", state.canWrite);
-  applyRole();
-
+  loadMarketPicker();
+  if (state.canWrite) loadDocumentPicker();
+  // A market or document added on the Dashboard in another tab appears when
+  // this one comes back into view.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    loadMarketPicker();
+    if (state.canWrite) loadDocumentPicker();
+  });
+  if (!state.canWrite) {
+    applyShowSources(false);
+  }
   // Without an ElevenLabs key every voice request would 503, so the control is
   // withheld rather than offered and then refused.
   if (info.voice_enabled === true) initVoice();
-
-  // No logout_url means there is no session to end - an open console with
-  // neither a password nor Microsoft sign-in in front of it.
-  if (!els.logoutBtn || !info.logout_url) return;
-  els.logoutBtn.hidden = false;
-  els.logoutBtn.addEventListener("click", async () => {
-    els.logoutBtn.disabled = true;
-    if (info.auth_mode !== "entra") {
-      try {
-        await fetch("/api/logout", { method: "POST" });
-      } catch (err) {
-        console.warn("logout failed", err);
-      }
-    }
-    location.href = info.logout_url;
-  });
 }
 
 initSession();
 
-function setProgress(fraction) {
-  const pct = Math.max(0, Math.min(1, fraction)) * 100;
-  els.uploadBar.style.width = `${pct.toFixed(1)}%`;
-}
-
-function showProgress(visible) {
-  if (visible) {
-    els.uploadProgress.hidden = false;
-    els.uploadProgress.setAttribute("aria-hidden", "false");
-  } else {
-    els.uploadProgress.hidden = true;
-    els.uploadProgress.setAttribute("aria-hidden", "true");
-  }
-}
-
-function uploadWithProgress(formData, onProgress) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/upload");
-    xhr.responseType = "text";
-    xhr.upload.onprogress = (evt) => {
-      if (evt.lengthComputable) onProgress(evt.loaded, evt.total);
-    };
-    xhr.onload = () => {
-      if (bounceIfLoggedOut(xhr.status)) return;
-      let body = {};
-      try { body = JSON.parse(xhr.responseText || "{}"); } catch { /* ignore */ }
-      resolve({ status: xhr.status, body });
-    };
-    xhr.onerror = () => reject(new Error("network error"));
-    xhr.onabort = () => reject(new Error("aborted"));
-    xhr.send(formData);
-  });
-}
-
-els.uploadForm.addEventListener("submit", (e) => {
-  e.preventDefault();
-  const files = Array.from(els.fileInput.files || []);
-  if (!files.length) return;
-  const collection = els.collectionInput.value.trim() || null;
-
-  for (const file of files) {
-    state.queue.push({
-      qid: state.nextQid++,
-      file,
-      filename: file.name,
-      size: file.size,
-      collection,
-      status: "queued",
-      uploadFrac: 0,
-      docId: null,
-      chunkCount: null,
-      error: null,
-    });
-  }
-
-  showProgress(false);
-  setStatus(
-    els.uploadStatus,
-    `${files.length} file${files.length === 1 ? "" : "s"} queued`,
-    "",
-  );
-  els.uploadForm.reset();
-  renderQueue();
-  pumpQueue();
-});
-
-async function pumpQueue() {
-  if (state.queueBusy) return;
-  const next = state.queue.find((q) => q.status === "queued");
-  if (!next) {
-    renderQueue();
-    return;
-  }
-  state.queueBusy = true;
-  next.status = "uploading";
-  next.uploadFrac = 0;
-  renderQueue();
-
-  const fd = new FormData();
-  fd.append("file", next.file);
-  if (next.collection) fd.append("collection", next.collection);
-
-  try {
-    const { status, body } = await uploadWithProgress(fd, (loaded, total) => {
-      next.uploadFrac = total ? loaded / total : 0;
-      updateQueueRowProgress(next.qid, next.uploadFrac);
-    });
-    if (status < 200 || status >= 300) {
-      const msg = body?.detail || body?.error || `HTTP ${status}`;
-      throw new Error(msg);
-    }
-    next.uploadFrac = 1;
-    next.docId = body.document_id;
-    next.status = "processing";
-    state.lastUploadId = body.document_id;
-    state.docs.unshift({
-      id: body.document_id,
-      status: body.status || "processing",
-      filename: next.filename,
-      collection: next.collection,
-    });
-    saveDocsCache();
-    renderDocs();
-    renderQueue();
-    // Hand off to per-doc poller; queue advances when poller observes a
-    // terminal status (see startPolling's terminal branch).
-    startPolling(body.document_id);
-  } catch (err) {
-    next.status = "failed";
-    next.error = err.message || String(err);
-    state.queueBusy = false;
-    renderQueue();
-    pumpQueue();
-  }
-}
-
-function updateQueueRowProgress(qid, frac) {
-  const bar = els.queueList.querySelector(
-    `li[data-qid="${qid}"] .progress-bar`,
-  );
-  if (bar) bar.style.width = `${(Math.max(0, Math.min(1, frac)) * 100).toFixed(1)}%`;
-}
-
-function renderQueue() {
-  const items = state.queue;
-  if (!items.length) {
-    els.queuePanel.hidden = true;
-    els.queueList.innerHTML = "";
-    els.queueSummary.textContent = "";
-    return;
-  }
-  els.queuePanel.hidden = false;
-
-  let queued = 0, uploading = 0, processing = 0, completed = 0, failed = 0;
-  for (const it of items) {
-    if (it.status === "queued") queued++;
-    else if (it.status === "uploading") uploading++;
-    else if (it.status === "processing") processing++;
-    else if (isIndexed(it.status)) completed++;
-    else if (it.status === "failed") failed++;
-  }
-  const parts = [];
-  if (uploading) parts.push(`${uploading} uploading`);
-  if (processing) parts.push(`${processing} processing`);
-  if (queued) parts.push(`${queued} queued`);
-  if (completed) parts.push(`${completed} completed`);
-  if (failed) parts.push(`${failed} failed`);
-  els.queueSummary.textContent = parts.join(" - ");
-
-  els.queueList.innerHTML = "";
-  for (const it of items) {
-    const li = document.createElement("li");
-    li.className = "queue-item";
-    li.dataset.qid = String(it.qid);
-
-    const row = document.createElement("div");
-    row.className = "queue-row";
-
-    const name = document.createElement("div");
-    name.className = "queue-name";
-    name.textContent = it.filename;
-
-    const actions = document.createElement("div");
-    actions.className = "queue-actions";
-
-    const badge = document.createElement("span");
-    badge.className = `badge ${it.status}`;
-    badge.textContent = it.status;
-    actions.appendChild(badge);
-
-    if (it.status === "queued") {
-      const rm = document.createElement("button");
-      rm.type = "button";
-      rm.className = "btn-secondary";
-      rm.textContent = "Remove";
-      rm.addEventListener("click", () => {
-        const idx = state.queue.findIndex((q) => q.qid === it.qid);
-        if (idx !== -1 && state.queue[idx].status === "queued") {
-          state.queue.splice(idx, 1);
-          renderQueue();
-        }
-      });
-      actions.appendChild(rm);
-    }
-
-    row.append(name, actions);
-    li.appendChild(row);
-
-    const meta = document.createElement("div");
-    meta.className = "queue-meta";
-    if (typeof it.size === "number") {
-      const sz = document.createElement("span");
-      sz.textContent = formatBytes(it.size);
-      meta.appendChild(sz);
-    }
-    if (it.collection) {
-      const c = document.createElement("span");
-      c.textContent = `collection: ${it.collection}`;
-      meta.appendChild(c);
-    }
-    if (isIndexed(it.status) && typeof it.chunkCount === "number") {
-      const cc = document.createElement("span");
-      cc.textContent = `${it.chunkCount} chunks`;
-      meta.appendChild(cc);
-    }
-    if (meta.childNodes.length) li.appendChild(meta);
-
-    if (it.status === "uploading") {
-      const prog = document.createElement("div");
-      prog.className = "progress";
-      const bar = document.createElement("div");
-      bar.className = "progress-bar";
-      bar.style.width = `${(it.uploadFrac * 100).toFixed(1)}%`;
-      prog.appendChild(bar);
-      li.appendChild(prog);
-    }
-
-    if (it.status === "failed" && it.error) {
-      const err = document.createElement("div");
-      err.className = "queue-error";
-      err.textContent = it.error;
-      li.appendChild(err);
-    }
-
-    els.queueList.appendChild(li);
-  }
-
-  const anyFinished = items.some((q) => isTerminal(q.status));
-  els.queueClearBtn.disabled = !anyFinished;
-}
-
-function formatBytes(n) {
-  if (!Number.isFinite(n) || n <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
-els.queueClearBtn.addEventListener("click", () => {
-  state.queue = state.queue.filter((q) => !isTerminal(q.status));
-  renderQueue();
+// Static text is relabelled by Lang.apply(); this is what the page built itself.
+// Messages already in the conversation keep the words they were written in.
+document.addEventListener("langchange", () => {
+  renderMarketPicker();
+  if (state.canWrite) renderDocumentPicker();
+  updateSendBtn();
+  followUiLanguageForVoice();
 });
 
 async function readNdjson(resp, onEvent) {
@@ -807,7 +296,7 @@ async function runChat(question) {
   answerNode.className = "answer";
   const spinner = document.createElement("span");
   spinner.className = "spinner";
-  spinner.setAttribute("aria-label", "thinking");
+  spinner.setAttribute("aria-label", Lang.t("chat.thinking"));
   answerNode.appendChild(spinner);
   bubble.appendChild(answerNode);
   let firstDeltaSeen = false;
@@ -832,10 +321,10 @@ async function runChat(question) {
       els.chatLog.scrollTop = els.chatLog.scrollHeight;
     } else if (evt.type === "error") {
       bubble.classList.add("error");
-      answerNode.textContent = `Query failed: ${evt.message || "unknown error"}`;
+      answerNode.textContent = Lang.t("chat.failed", { message: evt.message || Lang.t("chat.unknownError") });
     } else if (evt.type === "done") {
       if (!firstDeltaSeen) {
-        answerNode.textContent = "(empty answer)";
+        answerNode.textContent = Lang.t("chat.empty");
       } else {
         // Models sometimes still emit [1]/ strip leftover markers from the final text.
         answerNode.textContent = stripInlineCitations(answerNode.textContent);
@@ -846,7 +335,9 @@ async function runChat(question) {
 
   try {
     const body = { question };
+    const market = currentMarket();
     if (documentId) body.document_id = documentId;
+    else if (market) body.market = market;
     if (history.length) body.history = history;
     const resp = await fetch("/api/query/stream", {
       method: "POST",
@@ -870,11 +361,11 @@ async function runChat(question) {
         answerNode.textContent = stripInlineCitations(answerNode.textContent);
         answered = true;
       } else {
-        answerNode.textContent = "(stopped)";
+        answerNode.textContent = Lang.t("chat.stopped");
       }
     } else {
       bubble.classList.add("error");
-      answerNode.textContent = `Query failed: ${err.message}`;
+      answerNode.textContent = Lang.t("chat.failed", { message: err.message });
     }
   } finally {
     state.streaming = false;
@@ -963,7 +454,7 @@ function updateSendBtn() {
   const busy = state.streaming;
   els.chatForm.classList.toggle("is-streaming", busy);
   els.askBtn.disabled = !busy && !els.questionInput.value.trim();
-  els.askBtn.setAttribute("aria-label", busy ? "Stop generating" : "Send");
+  els.askBtn.setAttribute("aria-label", Lang.t(busy ? "chat.stop" : "chat.send"));
   updateMicBtn();
 }
 
@@ -990,7 +481,7 @@ function renderRewrite(text) {
   /** Shows how a follow-up was interpreted; hidden with source details. */
   const div = document.createElement("div");
   div.className = "rewrite";
-  div.textContent = `Searched for: ${text}`;
+  div.textContent = Lang.t("chat.searchedFor", { text });
   return div;
 }
 
@@ -1001,7 +492,7 @@ function renderSourceDocs(list) {
 
   const label = document.createElement("div");
   label.className = "source-docs-label";
-  label.textContent = "Documents";
+  label.textContent = Lang.t("chat.sources");
   wrap.appendChild(label);
 
   const links = document.createElement("div");
@@ -1011,12 +502,12 @@ function renderSourceDocs(list) {
   for (const c of list) {
     if (!c.document_id || seen.has(c.document_id)) continue;
     seen.add(c.document_id);
-    const name = c.filename || "document";
+    const name = c.filename || Lang.t("chat.untitled");
     const a = document.createElement("a");
     a.className = "source-doc-link";
     a.href = `/api/documents/${encodeURIComponent(c.document_id)}/file`;
     a.download = name;
-    a.title = `Download ${name}`;
+    a.title = Lang.t("chat.download", { name });
     a.textContent = name;
     links.appendChild(a);
   }
@@ -1032,26 +523,23 @@ function renderCitations(list) {
   cites.className = "citations";
   for (const c of list) {
     const line = document.createElement("div");
-    const loc = [c.filename, c.page_number ? `p.${c.page_number}` : null, c.heading]
+    const loc = [c.filename, c.page_number ? Lang.t("chat.page", { n: c.page_number }) : null, c.heading]
       .filter(Boolean)
       .join(" - ");
     // "vector", "keyword" or "both" - which retriever found this chunk. The
     // score is always vector similarity, so a keyword-only hit can score low
     // and still be the right answer; showing both together explains that.
-    const found = { dense: "vector", lexical: "keyword", both: "both" }[c.retrieval];
+    const found = { dense: "chat.foundVector", lexical: "chat.foundKeyword", both: "chat.foundBoth" }[
+      c.retrieval
+    ];
     const detail = [
-      typeof c.score === "number" ? `score ${c.score.toFixed(2)}` : null,
-      found ? `found by ${found}` : null,
+      typeof c.score === "number" ? Lang.t("chat.score", { score: c.score.toFixed(2) }) : null,
+      found ? Lang.t("chat.foundBy", { how: Lang.t(found) }) : null,
     ].filter(Boolean);
     line.textContent = `[${c.n}] ${loc}${detail.length ? ` (${detail.join(", ")})` : ""}`;
     cites.appendChild(line);
   }
   return cites;
-}
-
-function setStatus(node, text, kind) {
-  node.textContent = text;
-  node.className = `status ${kind || ""}`.trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -1072,12 +560,9 @@ function initVoice() {
   }
   els.voiceControls.hidden = false;
 
-  try {
-    const saved = localStorage.getItem(VOICE_LANG_KEY);
-    if (saved && els.voiceLang) els.voiceLang.value = saved;
-  } catch {
-    /* ignore */
-  }
+  // A voice language picked here sticks; until then it follows the interface.
+  const saved = savedVoiceLanguage();
+  if (els.voiceLang) els.voiceLang.value = saved || Lang.current;
   els.voiceLang?.addEventListener("change", () => {
     try {
       localStorage.setItem(VOICE_LANG_KEY, els.voiceLang.value);
@@ -1093,6 +578,21 @@ function initVoice() {
   });
 }
 
+function savedVoiceLanguage() {
+  try {
+    const saved = localStorage.getItem(VOICE_LANG_KEY);
+    return saved && [...(els.voiceLang?.options || [])].some((o) => o.value === saved) ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function followUiLanguageForVoice() {
+  if (els.voiceLang && !savedVoiceLanguage()) els.voiceLang.value = Lang.current;
+  updateMicBtn();
+  setVoiceStatus("");
+}
+
 function setVoiceStatus(text) {
   if (els.voiceStatus) els.voiceStatus.textContent = text || "";
 }
@@ -1102,7 +602,7 @@ function updateMicBtn() {
   els.micBtn.classList.toggle("is-recording", voice.recording);
   els.micBtn.setAttribute(
     "aria-label",
-    voice.recording ? "Stop recording" : voice.streaming ? "Stop speaking" : "Ask by voice",
+    Lang.t(voice.recording ? "voice.stopRecording" : voice.streaming ? "voice.stopSpeaking" : "voice.ask"),
   );
   // The written composer stays usable, but two answers streaming into the same
   // log at once would interleave.
@@ -1124,7 +624,7 @@ async function startRecording() {
       audio: { echoCancellation: true, noiseSuppression: true },
     });
   } catch (err) {
-    setVoiceStatus(err.name === "NotAllowedError" ? "Microphone blocked" : "No microphone");
+    setVoiceStatus(Lang.t(err.name === "NotAllowedError" ? "voice.blocked" : "voice.noMic"));
     return;
   }
 
@@ -1138,7 +638,7 @@ async function startRecording() {
     voice.recorder = new MediaRecorder(voice.micStream, mime ? { mimeType: mime } : undefined);
   } catch {
     releaseMic();
-    setVoiceStatus("Recording unsupported here");
+    setVoiceStatus(Lang.t("voice.unsupported"));
     return;
   }
 
@@ -1156,14 +656,14 @@ async function startRecording() {
     voice.recording = false;
     updateMicBtn();
     if (shouldSendRecording(blob, durationMs, peakRms)) sendVoiceTurn(blob);
-    else setVoiceStatus(blob.size > 0 ? "I didn't hear anything - try again?" : "");
+    else setVoiceStatus(blob.size > 0 ? Lang.t("voice.notHeard") : "");
   });
 
   voice.meter = startMicMeter(voice.micStream);
   voice.recorder.start();
   voice.startedAt = Date.now();
   voice.recording = true;
-  setVoiceStatus("Listening - click to send");
+  setVoiceStatus(Lang.t("voice.listening"));
   updateMicBtn();
 }
 
@@ -1340,13 +840,15 @@ async function sendVoiceTurn(blob) {
   stopPlayback();
   voice.streaming = true;
   voice.abort = new AbortController();
-  setVoiceStatus("Thinking...");
+  setVoiceStatus(Lang.t("voice.thinking"));
   updateMicBtn();
 
   const form = new FormData();
   form.append("file", blob, blob.type.includes("mp4") ? "audio.mp4" : "audio.webm");
   form.append("lang", lang);
+  const market = currentMarket();
   if (documentId) form.append("document_id", documentId);
+  else if (market) form.append("market", market);
   if (history.length) form.append("history", JSON.stringify(history));
 
   let bubble = null;
@@ -1363,7 +865,7 @@ async function sendVoiceTurn(blob) {
     answerNode.className = "answer";
     const spinner = document.createElement("span");
     spinner.className = "spinner";
-    spinner.setAttribute("aria-label", "thinking");
+    spinner.setAttribute("aria-label", Lang.t("chat.thinking"));
     answerNode.appendChild(spinner);
     bubble.appendChild(answerNode);
   };
@@ -1374,7 +876,7 @@ async function sendVoiceTurn(blob) {
       question = evt.text || "";
       appendMessage("user", question);
       ensureBubble();
-      setVoiceStatus("Answering...");
+      setVoiceStatus(Lang.t("voice.answering"));
     } else if (evt.type === "rewrite") {
       ensureBubble();
       if (evt.text) bubble.appendChild(renderRewrite(evt.text));
@@ -1397,14 +899,17 @@ async function sendVoiceTurn(blob) {
     } else if (evt.type === "error") {
       // A failure that arrives mid-stream is shown as itself. The endpoint
       // answers NDJSON precisely so this cannot become an empty success.
-      failure = evt.message || "unknown error";
+      // "no_speech" is the one refusal a person is meant to read and act on,
+      // so it is worded here rather than shown in the server's English.
+      failure =
+        evt.code === "no_speech" ? Lang.t("voice.noSpeech") : evt.message || Lang.t("chat.unknownError");
       ensureBubble();
       bubble.classList.add("error");
-      answerNode.textContent = `Voice failed: ${failure}`;
+      answerNode.textContent = Lang.t("voice.failed", { message: failure });
     } else if (evt.type === "done") {
       ensureBubble();
       if (!firstDeltaSeen) {
-        answerNode.textContent = "(empty answer)";
+        answerNode.textContent = Lang.t("chat.empty");
       } else {
         answerNode.textContent = stripInlineCitations(answerNode.textContent);
         answered = true;
@@ -1430,13 +935,13 @@ async function sendVoiceTurn(blob) {
         answerNode.textContent = stripInlineCitations(answerNode.textContent);
         answered = true;
       } else if (answerNode) {
-        answerNode.textContent = "(stopped)";
+        answerNode.textContent = Lang.t("chat.stopped");
       }
     } else {
       failure = err.message;
       ensureBubble();
       bubble.classList.add("error");
-      answerNode.textContent = `Voice failed: ${err.message}`;
+      answerNode.textContent = Lang.t("voice.failed", { message: err.message });
     }
   } finally {
     voice.streaming = false;
@@ -1451,31 +956,3 @@ async function sendVoiceTurn(blob) {
     }
   }
 }
-
-(function initCollapsiblePanels() {
-  const panels = [
-    { el: document.getElementById("upload-details"), key: "rag.collapse.upload.v1" },
-    { el: document.getElementById("docs-details"), key: "rag.collapse.docs.v1" },
-  ];
-  for (const { el, key } of panels) {
-    if (!el) continue;
-    try {
-      const saved = localStorage.getItem(key);
-      if (saved === "0") el.open = false;
-      else if (saved === "1") el.open = true;
-    } catch {
-      /* ignore */
-    }
-    el.addEventListener("toggle", () => {
-      try {
-        localStorage.setItem(key, el.open ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
-    });
-  }
-})();
-
-// Nothing about documents happens here: the first paint, the fetch and the
-// polling all belong to applyRole(), which runs when /api/me says whether this
-// console may see a corpus at all.

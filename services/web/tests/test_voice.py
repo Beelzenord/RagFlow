@@ -193,6 +193,11 @@ class VoiceEndpointTests(unittest.TestCase):
         resp = self.ask(scribe=(200, {"text": "..."}), lang="en")
         self.assertEqual([e["type"] for e in self.events(resp)], ["error"])
 
+    def test_non_speech_refusal_carries_a_code_the_page_can_word(self) -> None:
+        """The page says this in the listener's language, keyed on the code."""
+        events = self.events(self.ask(scribe=(200, {"text": "Tack!"}), lang="sv"))
+        self.assertEqual(events[0].get("code"), "no_speech")
+
     def test_voice_is_admin_only(self) -> None:
         """A reader may ask this same question in writing. The spoken path is
         not theirs, and hiding the microphone is not what stops them."""
@@ -578,6 +583,41 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(voice.voice_for_lang("sv"), voice.ELEVENLABS_VOICE_ID_SV)
         self.assertEqual(voice.voice_for_lang(None), voice.ELEVENLABS_VOICE_ID)
         self.assertEqual(voice.voice_for_lang("de"), voice.ELEVENLABS_VOICE_ID)
+
+
+class LanguageTests(unittest.TestCase):
+    """Voice follows the interface: en, sv, nb, fi, da."""
+
+    def test_scribe_codes_and_browser_tags_map_to_ours(self) -> None:
+        # Scribe may answer in ISO 639-3 as readily as 639-1.
+        cases = {
+            "swe": "sv", "SV": "sv", "sv-FI": "sv",
+            "nor": "nb", "nob": "nb", "nno": "nb", "no": "nb", "nn": "nb", "nb_NO": "nb",
+            "fin": "fi", "fi": "fi",
+            "dan": "da", "da-DK": "da",
+            "eng": "en", "en-GB": "en",
+        }
+        for value, expected in cases.items():
+            with self.subTest(value=value):
+                self.assertEqual(voice.normalize_lang(value), expected)
+
+    def test_anything_else_is_unknown(self) -> None:
+        for value in (None, "", "de", "deu", "  ", 42):
+            with self.subTest(value=value):
+                self.assertIsNone(voice.normalize_lang(value))
+
+    def test_norwegian_is_sent_to_elevenlabs_as_no(self) -> None:
+        # Our "nb" names the Bokmål dictionary; ElevenLabs knows plain Norwegian.
+        self.assertIn("language_code=no", voice._ws_url("voice-1", "nb"))
+        self.assertIn("language_code=fi", voice._ws_url("voice-1", "fi"))
+        self.assertIn("language_code=da", voice._ws_url("voice-1", "da"))
+        self.assertIn("language_code=sv", voice._ws_url("voice-1", "swe"))
+
+    def test_new_languages_use_the_default_voice_unless_configured(self) -> None:
+        for lang in ("nb", "fi", "da"):
+            with self.subTest(lang=lang):
+                self.assertIn(lang, voice.ELEVENLABS_VOICES)
+                self.assertTrue(voice.voice_for_lang(lang))
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Sign in - Rahmqvist Assistant</title>
+  <title data-i18n="login.pageTitle">Sign in - Rahmqvist Assistant</title>
   <link rel="stylesheet" href="/styles.css" />
   <script>
     (function () {
@@ -15,22 +15,24 @@
       }
     })();
   </script>
+  <script src="/lang.js"></script>
+  <script src="/strings.js"></script>
 </head>
 <body class="login-body">
   <main class="login-shell">
     <section class="panel login-card">
       <h1>Rahmqvist Assistant</h1>
-      <p class="muted">Sign in to upload documents and ask questions.</p>
+      <p class="muted" data-i18n="login.intro">Sign in to ask questions.</p>
       <form id="login-form">
         <label class="field">
-          <span>Username</span>
+          <span data-i18n="login.username">Username</span>
           <input type="text" id="username-input" autocomplete="username" autofocus required />
         </label>
         <label class="field">
-          <span>Password</span>
+          <span data-i18n="login.password">Password</span>
           <input type="password" id="password-input" autocomplete="current-password" required />
         </label>
-        <button type="submit" id="login-btn">Sign in</button>
+        <button type="submit" id="login-btn" data-i18n="login.submit">Sign in</button>
         <p class="status" id="login-status" aria-live="polite"></p>
       </form>
     </section>
@@ -46,7 +48,7 @@
         event.preventDefault();
         btn.disabled = true;
         status.className = "status";
-        status.textContent = "Signing in...";
+        status.textContent = Lang.t("login.signingIn");
         try {
           const resp = await fetch("/api/login", {
             method: "POST",
@@ -62,10 +64,13 @@
           }
           const body = await resp.json().catch(() => ({}));
           status.className = "status error";
-          status.textContent = body.error || `Sign in failed (HTTP ${resp.status})`;
+          status.textContent =
+            resp.status === 401
+              ? Lang.t("login.wrong")
+              : Lang.t("login.failed", { message: body.error || `HTTP ${resp.status}` });
         } catch (err) {
           status.className = "status error";
-          status.textContent = `Sign in failed: ${err.message}`;
+          status.textContent = Lang.t("login.failed", { message: err.message });
         }
         btn.disabled = false;
       });
