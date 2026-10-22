@@ -292,7 +292,7 @@ async function initSession() {
   }
   // Without an ElevenLabs key every voice request would 503, so the control is
   // withheld rather than offered and then refused.
-  if (info.voice_enabled === true) initVoice();
+  if (info.voice_enabled === true) initVoice(info.voice_languages);
 }
 
 initSession();
@@ -743,16 +743,17 @@ function renderCitations(list) {
 // touched: this shares the renderers and state.turns, and nothing else.
 // ---------------------------------------------------------------------------
 
-function initVoice() {
+function initVoice(languages) {
   if (!els.micBtn || !els.voiceControls) return;
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
     return;
   }
   els.voiceControls.hidden = false;
+  renderVoiceLanguages(languages);
 
   // A voice language picked here sticks; until then it follows the interface.
   const saved = savedVoiceLanguage();
-  if (els.voiceLang) els.voiceLang.value = saved || Lang.current;
+  if (els.voiceLang) els.voiceLang.value = saved || defaultVoiceLanguage();
   els.voiceLang?.addEventListener("change", () => {
     try {
       localStorage.setItem(VOICE_LANG_KEY, els.voiceLang.value);
@@ -768,6 +769,27 @@ function initVoice() {
   });
 }
 
+// Only the languages the server has a voice of its own for (VOICE_LANGUAGES in
+// voice.py) - offering one it would read in another language's voice would be
+// a promise it cannot keep. Each is named in itself, as the interface picker
+// names it. With a single language there is nothing to choose, so no picker.
+function renderVoiceLanguages(languages) {
+  if (!els.voiceLang) return;
+  const offered = (Array.isArray(languages) ? languages : []).filter((code) => Lang.supported.includes(code));
+  // An older server that does not say keeps the options in the page.
+  if (!offered.length) return;
+  els.voiceLang.replaceChildren(...offered.map((code) => new Option(Lang.names[code] || code, code)));
+  els.voiceLang.hidden = offered.length < 2;
+}
+
+// The interface's language when it has a voice; otherwise English, which
+// always does.
+function defaultVoiceLanguage() {
+  const offered = [...(els.voiceLang?.options || [])].map((o) => o.value);
+  if (offered.includes(Lang.current)) return Lang.current;
+  return offered.includes("en") ? "en" : offered[0] || "en";
+}
+
 function savedVoiceLanguage() {
   try {
     const saved = localStorage.getItem(VOICE_LANG_KEY);
@@ -778,7 +800,7 @@ function savedVoiceLanguage() {
 }
 
 function followUiLanguageForVoice() {
-  if (els.voiceLang && !savedVoiceLanguage()) els.voiceLang.value = Lang.current;
+  if (els.voiceLang && !savedVoiceLanguage()) els.voiceLang.value = defaultVoiceLanguage();
   updateMicBtn();
   setVoiceStatus("");
 }
