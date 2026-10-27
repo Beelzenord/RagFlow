@@ -120,7 +120,8 @@ async def rerank(
         now = time.monotonic()
         if now - _last_warning > _WARN_EVERY_SECONDS:
             _last_warning = now
-            log.warning("re-ranking failed, keeping the fused order: %s", exc or type(exc).__name__)
+            # A timeout has no message of its own; its type says what happened.
+            log.warning("re-ranking failed, keeping the fused order: %s", str(exc) or type(exc).__name__)
         return list(rows[:top_k])
     order = parse_order(reply, len(rows))
     return [rows[i] for i in merge(order, len(rows), top_k)]
