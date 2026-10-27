@@ -42,6 +42,7 @@ ADMIN_ROUTES = [
     ("DELETE", f"/api/markets/groups/{GROUP}", None),
     ("PUT", f"/api/documents/{DOC}/audience", {"everyone": True}),
     ("PUT", "/api/documents/audience", {"document_ids": [DOC], "everyone": True}),
+    ("POST", "/api/documents/rechunk-all", None),
 ]
 
 

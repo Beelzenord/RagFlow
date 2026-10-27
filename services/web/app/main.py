@@ -371,6 +371,12 @@ def _country_code(code: str) -> str:
     return value
 
 
+@app.post("/api/documents/rechunk-all", dependencies=[Depends(require_admin)])
+async def api_documents_rechunk_all(request: Request) -> JSONResponse:
+    """Rebuild every document's search chunks from the text already extracted."""
+    return await _forward(request, "POST", f"{INGESTION_URL}/documents/rechunk-all")
+
+
 @app.put("/api/documents/audience", dependencies=[Depends(require_admin)])
 async def api_documents_audience(body: BulkAudienceBody, request: Request) -> JSONResponse:
     return await _forward(

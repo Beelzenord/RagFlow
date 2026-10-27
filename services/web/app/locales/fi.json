@@ -246,5 +246,11 @@
   "dashboard.undo": "Kumoa",
   "dashboard.undoFailed": "{failed}/{total} ei voitu palauttaa.",
   "dashboard.undone": "Palautettu.",
-  "dashboard.uploadOptions": "Latausasetukset"
+  "dashboard.uploadOptions": "Latausasetukset",
+  "dashboard.reindexAll": "Indeksoi kaikki asiakirjat uudelleen...",
+  "dashboard.reindexTitle": "Indeksoidaanko kaikki asiakirjat uudelleen?",
+  "dashboard.reindexBody": "Rakentaa uudelleen sen, miten jokainen asiakirja jaetaan hakua varten, jo poimitusta tekstistä. Mitään ei jäsennetä uudelleen, ja vastaukset toimivat sillä välin.",
+  "dashboard.reindex": "Indeksoi uudelleen",
+  "dashboard.reindexStarted": { "one": "Indeksoidaan {n} asiakirja uudelleen taustalla.", "other": "Indeksoidaan {n} asiakirjaa uudelleen taustalla." },
+  "dashboard.reindexNothing": "Ei uudelleen indeksoitavia asiakirjoja."
 }
