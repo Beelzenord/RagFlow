@@ -95,6 +95,10 @@ const els = {
   dropzoneIcon: $("dropzone-icon"),
   detail: $("detail"),
   detailName: $("detail-name"),
+  detailRename: $("detail-rename"),
+  renameForm: $("rename-form"),
+  renameInput: $("rename-input"),
+  renameExt: $("rename-ext"),
   detailClose: $("detail-close"),
   detailMeta: $("detail-meta"),
   preview: $("preview"),
@@ -1934,6 +1938,12 @@ document.addEventListener("keydown", (e) => {
     els.shortcutsDialog.showModal();
     return;
   }
+  // F2 renames from anywhere in an open drawer, as in a file manager.
+  if (e.key === "F2" && state.detail) {
+    e.preventDefault();
+    startRename();
+    return;
+  }
   if (!keysAreOurs(e.target)) return;
   switch (e.key) {
     case "ArrowDown":
@@ -1956,6 +1966,13 @@ document.addEventListener("keydown", (e) => {
       if (!activeDoc()) return;
       e.preventDefault();
       setSelected(activeDoc().id, !state.selected.has(activeDoc().id));
+      break;
+    case "r":
+    case "F2":
+      if (!activeDoc()) return;
+      e.preventDefault();
+      openDetail(activeDoc());
+      startRename();
       break;
     default:
   }
@@ -2055,6 +2072,8 @@ function loadPreview(doc) {
 }
 
 let previewTimer = null;
+// The name being edited in the drawer's title: { doc, ext, saving }.
+let renaming = null;
 
 // The drawer is not modal: the table stays usable beside it, and with the
 // arrow keys the drawer follows the row, Quick Look style. `deferPreview` waits
@@ -2067,6 +2086,7 @@ function openDetail(doc, { deferPreview = false } = {}) {
   els.detail.hidden = false;
   document.body.classList.add("has-drawer");
   if (switching) {
+    endRename();
     detailEditor.set(doc.audience);
     setStatus(els.detailStatus, "");
     clearTimeout(previewTimer);
@@ -2090,6 +2110,7 @@ function markOpenRow() {
 function closeDetail({ restoreFocus = false } = {}) {
   const id = state.detail?.id;
   clearTimeout(previewTimer);
+  endRename();
   state.detail = null;
   clearPreview();
   els.detail.hidden = true;
@@ -2135,6 +2156,126 @@ els.detailDelete.addEventListener("click", async () => {
     return;
   }
   await Promise.all([loadDocs(), loadMarkets()]);
+});
+
+// --- Renaming --------------------------------------------------------------------
+// In the drawer's title. The field holds the name without its extension, which
+// stays - ingestion keeps it too. Enter or leaving the field saves; Esc cancels.
+
+// As ingestion's naming.extension_of: short letters-and-digits endings only.
+const EXTENSION = /\.[A-Za-z0-9]{1,8}$/;
+
+function splitName(name) {
+  const m = EXTENSION.exec(name || "");
+  return m && m.index > 0 ? [name.slice(0, m.index), m[0]] : [name || "", ""];
+}
+
+function startRename() {
+  const doc = state.detail;
+  if (!doc || renaming) return;
+  const [stem, ext] = splitName(doc.original_filename);
+  renaming = { doc, ext, saving: false };
+  els.renameInput.value = stem;
+  els.renameInput.disabled = false;
+  els.renameInput.setAttribute("aria-label", t("dashboard.renameLabel", { name: doc.original_filename }));
+  els.renameExt.textContent = ext;
+  els.renameExt.hidden = !ext;
+  els.detailName.hidden = true;
+  els.detailRename.hidden = true;
+  els.renameForm.hidden = false;
+  setStatus(els.detailStatus, "");
+  els.renameInput.focus();
+  els.renameInput.select();
+}
+
+function endRename({ restoreFocus = false } = {}) {
+  if (!renaming) return;
+  // Cleared first: hiding the field blurs it, and that blur must save nothing.
+  renaming = null;
+  els.renameForm.hidden = true;
+  els.detailName.hidden = false;
+  els.detailRename.hidden = false;
+  if (restoreFocus) els.detailRename.focus();
+}
+
+// Ingestion answers with the document as it now is.
+async function patchName(doc, name) {
+  const updated = await api(`/api/documents/${encodeURIComponent(doc.id)}`, {
+    method: "PATCH",
+    body: { filename: name },
+  });
+  if (state.detail?.id === updated.id) {
+    refreshDetailMeta(updated);
+    els.detailName.textContent = updated.original_filename;
+  }
+  await loadDocs();
+  return updated;
+}
+
+// `leaving`: the field lost focus. Then nothing keeps it open - a name that
+// can't be saved gives way to the old one rather than trapping focus.
+async function saveRename({ leaving = false } = {}) {
+  if (!renaming || renaming.saving) return;
+  const { doc, ext } = renaming;
+  let stem = els.renameInput.value.trim().replace(/\s+/g, " ");
+  // Typed with its extension: as ingestion does, it isn't doubled.
+  if (ext && stem.toLowerCase().endsWith(ext.toLowerCase())) stem = stem.slice(0, -ext.length).trimEnd();
+  const before = doc.original_filename;
+  if (!stem || stem + ext === before) {
+    endRename({ restoreFocus: !leaving });
+    return;
+  }
+  if (/[\\/]/.test(stem)) {
+    setStatus(els.detailStatus, t("dashboard.renameSlash"), "error");
+    if (leaving) endRename();
+    else els.renameInput.focus();
+    return;
+  }
+  renaming.saving = true;
+  els.renameInput.disabled = true;
+  try {
+    const updated = await patchName(doc, stem + ext);
+    // The drawer may have moved on to another document meanwhile.
+    if (renaming?.doc === doc) endRename({ restoreFocus: !leaving });
+    toast(t("dashboard.renamed", { name: updated.original_filename }), {
+      action: { label: t("dashboard.undo"), run: () => undoRename(updated, before) },
+    });
+  } catch (err) {
+    const message = t("dashboard.renameFailed", { message: err.message });
+    if (renaming?.doc !== doc) {
+      toast(message, { kind: "error" });
+      return;
+    }
+    renaming.saving = false;
+    els.renameInput.disabled = false;
+    setStatus(els.detailStatus, message, "error");
+    if (leaving) endRename();
+    else els.renameInput.focus();
+  }
+}
+
+async function undoRename(doc, name) {
+  try {
+    await patchName(doc, name);
+    flash(t("dashboard.undone"));
+  } catch (err) {
+    toast(t("dashboard.renameFailed", { message: err.message }), { kind: "error" });
+  }
+}
+
+els.detailRename.addEventListener("click", startRename);
+els.detailName.addEventListener("dblclick", startRename);
+els.renameForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  saveRename();
+});
+els.renameInput.addEventListener("blur", () => saveRename({ leaving: true }));
+els.renameInput.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  // Cancels the name only: the drawer stays open.
+  e.preventDefault();
+  e.stopPropagation();
+  endRename({ restoreFocus: true });
 });
 
 // --- Bulk actions ----------------------------------------------------------------
@@ -2955,6 +3096,7 @@ function paintIcons() {
   els.uploadOptionsBtn.append(icon("chevron"));
   els.dropzoneIcon.append(icon("upload"));
   els.detailClose.append(icon("close"));
+  els.detailRename.append(icon("edit"));
   els.bulkClearBtn.append(icon("close"));
   els.trayIcon.append(icon("upload"));
   els.queueToggle.append(icon("chevron"));

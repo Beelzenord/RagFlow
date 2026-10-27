@@ -1205,6 +1205,71 @@ th[aria-sort="ascending"] .sort-arrow {
   word-break: break-word;
 }
 
+/* The title and its pencil; renaming swaps both for the field. */
+.detail-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-title h2 {
+  /* Centres the first line on the 28px buttons beside it. */
+  padding-top: 3px;
+  min-width: 0;
+}
+
+.detail-rename {
+  flex: none;
+  opacity: 0.7;
+}
+
+.detail-rename:hover,
+.detail-rename:focus-visible {
+  opacity: 1;
+}
+
+/* One box for the name and its fixed extension, focused as a whole. */
+.rename-form {
+  display: flex;
+  align-items: baseline;
+  flex: 1;
+  min-width: 0;
+  padding: 0 10px;
+  background: var(--code-bg);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.rename-form input[type="text"],
+.rename-form input[type="text"]:focus {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  padding: 3px 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  /* 16px also keeps iOS from zooming in on focus. */
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.rename-form input:disabled {
+  opacity: 0.6;
+}
+
+.rename-ext {
+  flex: none;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 650;
+  user-select: none;
+}
+
 .facts {
   display: flex;
   gap: 12px;

@@ -175,7 +175,15 @@
 
     <aside class="drawer" id="detail" hidden aria-labelledby="detail-name">
       <div class="detail-head">
-        <h2 id="detail-name"></h2>
+        <div class="detail-title">
+          <h2 id="detail-name"></h2>
+          <button type="button" id="detail-rename" class="btn-icon detail-rename" aria-keyshortcuts="F2 r" aria-label="Rename" data-i18n-aria-label="dashboard.rename" title="Rename" data-i18n-title="dashboard.rename"></button>
+          <!-- The name without its extension, which stays: see renaming in dashboard.js. -->
+          <form class="rename-form" id="rename-form" hidden>
+            <input type="text" id="rename-input" maxlength="200" autocomplete="off" spellcheck="false" enterkeyhint="done">
+            <span class="rename-ext" id="rename-ext"></span>
+          </form>
+        </div>
         <button type="button" id="detail-close" class="btn-icon" aria-label="Close details" data-i18n-aria-label="dashboard.closeDetails"></button>
       </div>
       <div class="detail-meta" id="detail-meta"></div>
@@ -276,6 +284,7 @@
       <dt><kbd>&uarr;</kbd> <kbd>&darr;</kbd></dt><dd data-i18n="dashboard.kbMove">Move between documents</dd>
       <dt><kbd>Enter</kbd></dt><dd data-i18n="dashboard.kbOpen">Open the document</dd>
       <dt><kbd>x</kbd></dt><dd data-i18n="dashboard.kbSelect">Select or deselect it</dd>
+      <dt><kbd>r</kbd> <kbd>F2</kbd></dt><dd data-i18n="dashboard.kbRename">Rename the document</dd>
       <dt><kbd>Esc</kbd></dt><dd data-i18n="dashboard.kbClose">Close, or clear the selection</dd>
       <dt><kbd>?</kbd></dt><dd data-i18n="dashboard.kbHelp">Show these shortcuts</dd>
     </dl>

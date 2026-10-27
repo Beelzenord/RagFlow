@@ -39,6 +39,7 @@ the language the answer must be in, and what must hold:
 | not_covered | for questions the documents do not answer, the answer says so |
 
 `fixtures.json` lists the test documents and how each must be tagged; the run
-stops early if one is missing or tagged differently. The scoring and the case
+stops early if one is missing or tagged differently. Documents are found by
+name, so a renamed test document counts as missing. The scoring and the case
 file are unit-tested in CI (`eval/tests/`); asking the questions needs the
 stack and real keys, so it stays a local command.
