@@ -717,11 +717,108 @@ button:disabled {
 .chat-form.is-streaming .send-btn .icon-send { display: none; }
 .chat-form.is-streaming .send-btn .icon-stop { display: block; }
 
-.composer-hint {
+.composer-notes {
   margin: 6px 2px 0;
+  display: flex;
+  align-items: baseline;
+  gap: 4px 16px;
+  flex-wrap: wrap;
   color: var(--muted);
   font-size: 11px;
+}
+
+.composer-privacy,
+.composer-hint {
+  margin: 0;
+}
+
+.composer-hint {
+  margin-left: auto;
   text-align: right;
+}
+
+/* Was this answer helpful? Quiet until used. */
+.feedback {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  white-space: normal;
+}
+
+.feedback-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: -6px;
+}
+
+.thumb {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.thumb svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.thumb:hover {
+  color: var(--text);
+  background: var(--msg-bot-bg);
+}
+
+.thumb:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.thumb[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.thumb[aria-pressed="true"] svg {
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+}
+
+/* A finger needs more room than a pointer. */
+@media (pointer: coarse) {
+  .thumb {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+.feedback-status {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.feedback-missing {
+  display: flex;
+  gap: 6px;
+  max-width: 440px;
+}
+
+.feedback-missing input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 13px;
 }
 
 /* Push-to-talk. Sits with the chat controls rather than in the composer so the

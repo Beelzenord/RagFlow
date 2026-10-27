@@ -126,6 +126,10 @@ services:
       ENTRA_ADMIN_ROLE: ${ENTRA_ADMIN_ROLE:-Admin}
       ENTRA_READER_ROLE: ${ENTRA_READER_ROLE:-Reader}
       DEV_FORCE_ROLE: ${DEV_FORCE_ROLE:-}
+      # The chat's note on the question log, and its thumbs; the log itself is
+      # the query service's.
+      ANSWER_LOG_ENABLED: ${ANSWER_LOG_ENABLED:-true}
+      ANSWER_LOG_DAYS: ${ANSWER_LOG_DAYS:-90}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-21m00Tcm4TlvDq8ikWAM}
       ELEVENLABS_VOICE_ID_SV: ${ELEVENLABS_VOICE_ID_SV:-kPdGSxhZAqy4bmPAf9iJ}

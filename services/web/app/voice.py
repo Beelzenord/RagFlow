@@ -339,7 +339,7 @@ async def run_turn(
       {"type":"citations","data":[{...}, ...]}
       {"type":"delta","text":"..."}
       {"type":"audio","b64":"...","sample_rate":22050}
-      {"type":"done"}
+      {"type":"done","answer_id":"..."}
       {"type":"error","message":"..."}
     """
     if not enabled():
@@ -416,6 +416,8 @@ async def _answer_and_speak(
 
     queue: asyncio.Queue[bytes | None] = asyncio.Queue()
     failed: list[str] = []
+    # The query service's id for this answer, for a thumb up or down on it.
+    done: dict[str, str] = {}
 
     try:
         socket = await ws_connect(
@@ -462,6 +464,8 @@ async def _answer_and_speak(
                     elif kind == "error":
                         raise RuntimeError(evt.get("message") or "query service error")
                     elif kind == "done":
+                        if evt.get("answer_id"):
+                            done["answer_id"] = evt["answer_id"]
                         break
             for sentence in aggregator.flush():
                 await socket.send(json.dumps({"text": sentence}))
@@ -530,4 +534,4 @@ async def _answer_and_speak(
     if failed:
         yield ndjson({"type": "error", "message": failed[0]})
     else:
-        yield ndjson({"type": "done"})
+        yield ndjson({"type": "done", **done})

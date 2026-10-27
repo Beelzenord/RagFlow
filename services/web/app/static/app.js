@@ -36,6 +36,9 @@ const state = {
   // Set from /api/me. Starts false so a reader is never briefly offered a
   // control the server would refuse; the server checks again regardless.
   canWrite: false,
+  // How long questions are kept (/api/me), for the note under the composer;
+  // null when they are not logged.
+  logDays: null,
   streaming: false,
   // Set while an answer is in flight so the send button can cancel it.
   abort: null,
@@ -84,6 +87,7 @@ const els = {
   micBtn: document.getElementById("mic-btn"),
   voiceLang: document.getElementById("voice-lang"),
   voiceStatus: document.getElementById("voice-status"),
+  privacyNote: document.getElementById("privacy-note"),
 };
 
 const bounceIfLoggedOut = Shell.bounceIfLoggedOut;
@@ -278,6 +282,8 @@ function applyShowSources(on) {
 async function initSession() {
   const info = await Shell.session;
   state.canWrite = info.can_write === true;
+  state.logDays = Number.isInteger(info.question_log_days) ? info.question_log_days : null;
+  renderPrivacyNote();
   loadMarketPicker();
   if (state.canWrite) loadDocumentPicker();
   // A market or document added on the Dashboard in another tab appears when
@@ -304,6 +310,7 @@ document.addEventListener("langchange", () => {
   if (state.canWrite) renderDocumentPicker();
   updateSendBtn();
   followUiLanguageForVoice();
+  renderPrivacyNote();
   // The same line, in the new language - no roll, nothing new drawn.
   if (state.greeting.key) showGreeting(state.greeting.key, { animate: false });
 });
@@ -382,6 +389,7 @@ async function runChat(question) {
         // Models sometimes still emit [1]/ strip leftover markers from the final text.
         answerNode.textContent = stripInlineCitations(answerNode.textContent);
         answered = true;
+        if (evt.answer_id) bubble.appendChild(renderFeedback(evt.answer_id));
       }
     }
   };
@@ -730,6 +738,138 @@ function renderCitations(list) {
     cites.appendChild(line);
   }
   return cites;
+}
+
+// ---------------------------------------------------------------------------
+// Was this answer helpful?
+//
+// Thumbs under each finished answer, sent with the id the server gave it. The
+// server is told the rating, never who gave it. A thumbs down then asks,
+// optionally, what was missing; admins see both on the Dashboard's Insights.
+// Nothing under an error, an empty or a stopped answer: those were never logged.
+
+const THUMB_PATHS = {
+  up: "M7 10v12M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z",
+  down: "M17 14V2M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z",
+};
+
+function thumbButton(kind, label) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "thumb";
+  btn.setAttribute("aria-pressed", "false");
+  btn.setAttribute("aria-label", label);
+  btn.title = label;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(svg.namespaceURI, "path");
+  path.setAttribute("d", THUMB_PATHS[kind]);
+  svg.appendChild(path);
+  btn.appendChild(svg);
+  return btn;
+}
+
+function renderFeedback(answerId) {
+  const wrap = document.createElement("div");
+  wrap.className = "feedback";
+
+  const row = document.createElement("div");
+  row.className = "feedback-row";
+  row.setAttribute("role", "group");
+  row.setAttribute("aria-label", Lang.t("chat.rateLabel"));
+  const up = thumbButton("up", Lang.t("chat.helpful"));
+  const down = thumbButton("down", Lang.t("chat.notHelpful"));
+  const status = document.createElement("span");
+  status.className = "feedback-status";
+  status.setAttribute("role", "status");
+  row.append(up, down, status);
+
+  const form = document.createElement("form");
+  form.className = "feedback-missing";
+  form.hidden = true;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 500;
+  input.placeholder = Lang.t("chat.missingPlaceholder");
+  input.setAttribute("aria-label", Lang.t("chat.missingPlaceholder"));
+  const send = document.createElement("button");
+  send.type = "submit";
+  send.className = "btn-secondary";
+  send.textContent = Lang.t("chat.missingSend");
+  form.append(input, send);
+  wrap.append(row, form);
+
+  let rating = 0;
+  const press = (value) => {
+    up.setAttribute("aria-pressed", String(value === 1));
+    down.setAttribute("aria-pressed", String(value === -1));
+  };
+  // Shown pressed straight away, and put back if the server could not be told.
+  const submit = async (value, comment) => {
+    const before = rating;
+    rating = value;
+    press(value);
+    status.textContent = "";
+    try {
+      const resp = await fetch(`/api/answers/${encodeURIComponent(answerId)}/feedback`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(comment ? { rating: value, comment } : { rating: value }),
+      });
+      if (bounceIfLoggedOut(resp.status)) return false;
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return true;
+    } catch {
+      rating = before;
+      press(before);
+      status.textContent = Lang.t("chat.feedbackFailed");
+      return false;
+    }
+  };
+  const closeForm = () => {
+    form.hidden = true;
+    status.textContent = Lang.t("chat.thanks");
+  };
+
+  up.addEventListener("click", async () => {
+    if (rating === 1) return;
+    form.hidden = true;
+    if (await submit(1)) status.textContent = Lang.t("chat.thanks");
+  });
+  // The thumbs down counts at once; what was missing is a bonus.
+  down.addEventListener("click", async () => {
+    if (rating === -1 || (await submit(-1))) {
+      form.hidden = false;
+      input.focus();
+    }
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const comment = input.value.trim();
+    if (!comment) return closeForm();
+    send.disabled = true;
+    if (await submit(-1, comment)) {
+      form.hidden = true;
+      input.value = "";
+      status.textContent = Lang.t("chat.thanksMissing");
+    }
+    send.disabled = false;
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    closeForm();
+    down.focus();
+  });
+  return wrap;
+}
+
+// "Questions are kept anonymously for 90 days" under the composer, so it is
+// said before anything is asked - and only while that is true.
+function renderPrivacyNote() {
+  if (!els.privacyNote) return;
+  els.privacyNote.hidden = state.logDays === null;
+  if (state.logDays !== null) els.privacyNote.textContent = Lang.t("chat.privacyNote", { n: state.logDays });
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,6 +1265,7 @@ async function sendVoiceTurn(blob) {
       } else {
         answerNode.textContent = stripInlineCitations(answerNode.textContent);
         answered = true;
+        if (evt.answer_id) bubble.appendChild(renderFeedback(evt.answer_id));
       }
     }
   };
