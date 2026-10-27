@@ -103,9 +103,13 @@ Response:
   "citations": [
     {"n": 1, "document_id": "…", "filename": "brochure.pdf", "page_number": 3, "heading": "Pricing", "score": 0.83},
     ...
-  ]
+  ],
+  "answer_id": "…"
 }
 ```
+
+`answer_id` is what the chat's 👍/👎 rate (see *The question log* below); it is
+`null` when the log is turned off.
 
 **How an answer is found.** Two retrievers search the documents the question
 may draw on: one by meaning (vectors), one by exact words (useful for invoice
@@ -118,6 +122,53 @@ broken reply keeps the fused order. The answer is always written in the
 language of the question, whatever language the sources are in.
 
 To check a change to any of this, run the answer evaluation: `eval/README.md`.
+
+**Re-indexing.** Documents are split for search at paragraphs, so an FAQ
+question stays with its answer and no rule is cut mid-sentence. After a change
+to how documents are split, *Re-index all documents…* in the Dashboard's ⋯ menu
+(All documents) rebuilds every document's chunks from the text already
+extracted: nothing is sent to LlamaParse again, only the embeddings are paid
+for, and each document keeps answering from its old chunks until the new ones
+are in. Over the API: `POST /documents/rechunk-all` on ingestion.
+
+## The question log
+
+What people ask, whether the documents answered it, and what they thought of
+the answer - so the gaps in the documents show up without anyone reporting
+them.
+
+- **What is kept, per answer:** the question as asked, the language, the
+  market picked in the chat, whether it was spoken, the answer (up to 4,000
+  characters) and the documents it cited. A quick check after the answer
+  (temperature 0, one word) marks it *answered*, *partly answered* or *not
+  covered*; *nothing found* when no document matched at all. Answers stopped
+  half-way are not kept.
+- **👍/👎 in the chat.** Under every finished answer, for readers too. A 👎
+  then asks, optionally, *What was missing?* (up to 500 characters).
+- **Anonymous.** Nothing records who asked or who rated. Questions can still
+  contain personal details, so rows are deleted after `ANSWER_LOG_DAYS` (90 by
+  default) - at startup and then daily - and the chat says so under the box.
+- **Insights, for admins.** *Questions → Insights* in the Dashboard's sidebar
+  (`#insights`): how many questions were asked, the share answered, how many
+  were not covered and the thumbs down, for 7, 30 or 90 days and per market.
+  Below, the questions grouped by wording, the ones that need attention first:
+  not covered, partly answered, or given a 👎. Open one for the latest answer,
+  the documents it used and what people wrote. *Export CSV* downloads what is
+  shown. Readers get 403 from `/api/insights`, and none of its wording.
+- **Never in the way.** The row is written after the answer has been sent;
+  if writing it fails, the answer is unaffected and the service logs a warning.
+
+Turn it off with `ANSWER_LOG_ENABLED=false` (the chat then offers no thumbs and
+drops the note; the daily purge still clears what was kept). The table is
+`db/migrations/06-answer-log.sql`; apply it to an existing database by hand or
+with `./infra/migrate.sh`:
+
+```bash
+docker compose exec -T postgres psql -U postgres -d postgres < db/migrations/06-answer-log.sql
+```
+
+Until it is applied, answers work as before and the query service warns once
+every ten minutes that questions are not being logged.
 
 ## n8n workflows
 
@@ -261,6 +312,9 @@ One library rather than tabs:
 - **Upload** with the button, or by dropping PDF and JPEG files on the table.
 - **Keyboard:** `/` search, arrow keys move, `Enter` opens, `x` selects, `Esc`
   closes, `?` lists these.
+- **Insights** sits under *Questions*, below the markets: what people ask and
+  what the documents do not answer (see *The question log*). Its count is the
+  questions needing attention in the last 30 days.
 
 Its styles are in `services/web/app/admin/dashboard.css`, served to admins only,
 like its script.
