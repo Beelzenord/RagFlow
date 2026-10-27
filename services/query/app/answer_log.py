@@ -76,6 +76,10 @@ INSIGHTS_SQL = (
 )
 # Enough history for 90 days of a busy office, without unbounded reads.
 INSIGHTS_ROW_CAP = 5000
+# Sources are stored with the name the document had then; Insights shows today's.
+CURRENT_NAMES_SQL = (
+    "SELECT id::text AS id, original_filename FROM documents WHERE id = ANY(CAST(:ids AS uuid[]))"
+)
 
 
 def sources_of(citations: Iterable[Any]) -> list[dict[str, str]]:
@@ -97,6 +101,27 @@ def normalize_question(text: str) -> str:
 
 
 # --- Reading: the Insights view ----------------------------------------------------------
+
+def cited_document_ids(rows: Iterable[Mapping[str, Any]]) -> list[str]:
+    """Every document the rows cite, once each."""
+    return sorted({s["document_id"] for r in rows for s in r.get("sources") or [] if s.get("document_id")})
+
+
+def current_sources(rows: Iterable[Mapping[str, Any]], names: Mapping[str, str]) -> list[dict[str, Any]]:
+    """The rows with each cited document under the name it has now, so a
+    renamed document is not listed by its old name. One deleted since keeps
+    the name it had."""
+    return [
+        {
+            **r,
+            "sources": [
+                {**s, "filename": names.get(s.get("document_id"), s.get("filename"))}
+                for s in r.get("sources") or []
+            ],
+        }
+        for r in rows
+    ]
+
 
 def _iso(value: Any) -> str:
     return value.isoformat() if isinstance(value, datetime) else str(value or "")
