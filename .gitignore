@@ -22,3 +22,6 @@ redis_data/
 .idea/
 .vscode/
 *.log
+
+# Answer evaluation runs (eval/run.py) - local, may quote document text.
+eval/reports/

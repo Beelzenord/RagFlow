@@ -1,0 +1,16 @@
+{
+  "_comment": "The test documents the evaluation expects, and who each is for: \"global\", or a list of country codes. run.py checks them before asking anything; --seed uploads and tags the missing ones.",
+  "folder": "test-documents",
+  "documents": {
+    "travel-and-expense-policy.pdf": "global",
+    "travel-and-expense-addendum-sweden.pdf": ["SE"],
+    "it-acceptable-use-and-security-policy.pdf": "global",
+    "code-of-conduct-gifts-and-conflicts.pdf": "global",
+    "learning-and-development-policy.pdf": "global",
+    "sick-leave-policy-sweden.pdf": ["SE"],
+    "sick-leave-policy-norway.pdf": ["NO"],
+    "friskvardspolicy-sverige.pdf": ["SE"],
+    "remote-work-policy-sweden.pdf": ["SE"],
+    "remote-work-policy-norway.pdf": ["NO"]
+  }
+}
