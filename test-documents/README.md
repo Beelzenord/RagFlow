@@ -5,7 +5,9 @@ questions, and how answers follow the **Answers for** market. Every page says
 TEST DOCUMENT, every figure is invented, and the contact addresses use the
 non-routable `rahmqvist.example` domain.
 
-Upload them on the Dashboard and tag each one as below.
+Upload them on the Dashboard and tag each one as below - or let the answer
+evaluation do it: `python3 eval/run.py --seed` (see `eval/README.md`). The
+tags it expects are in `eval/fixtures.json`.
 
 | File | Tag as | Good for |
 |---|---|---|

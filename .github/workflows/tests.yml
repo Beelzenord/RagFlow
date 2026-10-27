@@ -1,0 +1,69 @@
+# Unit tests on every pull request and every push to main. No secrets: nothing
+# here calls OpenAI, LlamaParse or Azure. The answer evaluation (eval/) needs a
+# running stack and real keys, so it is run locally - see eval/README.md.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  service:
+    name: ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The Dockerfiles run Python 3.11, so the tests do too.
+        service: [web, ingestion, query]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/${{ matrix.service }}/requirements.txt
+
+      # The web tests run lang.js and greetings.js in Node; without it they skip.
+      - uses: actions/setup-node@v4
+        if: matrix.service == 'web'
+        with:
+          node-version: "20"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          if [ "${{ matrix.service }}" != "web" ]; then pip install ./services/shared; fi
+          pip install -r services/${{ matrix.service }}/requirements.txt
+
+      - name: Unit tests
+        working-directory: services/${{ matrix.service }}
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: JavaScript syntax
+        if: matrix.service == 'web'
+        run: |
+          for f in services/web/app/static/*.js services/web/app/admin/*.js; do
+            node --check "$f"
+          done
+
+  eval-scoring:
+    name: eval scoring
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # The scoring and the case file only; asking the questions needs the stack.
+      - name: Unit tests
+        run: python -m unittest discover -s eval/tests -t eval -v
