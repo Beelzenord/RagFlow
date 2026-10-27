@@ -64,6 +64,13 @@ async def _embed_chunks(embedder: EmbeddingClient, chunks: list, original_filena
     return embeddings
 
 
+async def _current_filename(session, document_id: str, lock: bool = False) -> str:
+    """The name as it is now. `lock` holds the row until the caller's
+    transaction ends, so a rename waits rather than slipping in between."""
+    sql = "SELECT original_filename FROM documents WHERE id = :id" + (" FOR UPDATE" if lock else "")
+    return (await session.execute(text(sql), {"id": document_id})).scalar_one_or_none() or ""
+
+
 async def _replace_chunks(session, document_id: str, chunks: list, embeddings: list[list[float]]) -> None:
     """Swap a document's chunks for new ones, inside the caller's transaction,
     so a question never sees half of each."""
@@ -96,16 +103,12 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
     """Top-level pipeline. Always finalizes the document + job rows, even on failure."""
     job_id: str | None = None
     embedder: EmbeddingClient | None = None
+    renamed = False
     try:
-        # 1. Mark processing + open job, and grab the filename for embedding context.
+        # 1. Mark processing + open job.
         async with session_scope() as session:
             await _set_doc_status(session, document_id, "processing")
             job_id = await _start_job(session, document_id)
-            row = await session.execute(
-                text("SELECT original_filename FROM documents WHERE id = :id"),
-                {"id": document_id},
-            )
-            original_filename = row.scalar_one_or_none() or ""
 
         # 2. Parse to markdown (network-bound to LlamaCloud), verified per page
         # against the PDF's own text layer.
@@ -126,12 +129,18 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
         if not chunks:
             raise RuntimeError("Chunker produced no chunks")
 
-        # 4. Embed
+        # 4. Embed, with the name as it is now: the document may have been
+        # renamed while LlamaParse worked.
+        async with session_scope() as session:
+            original_filename = await _current_filename(session, document_id)
         embedder = EmbeddingClient()
         embeddings = await _embed_chunks(embedder, chunks, original_filename)
 
         # 5. Persist atomically: wipe old chunks, insert markdown + new chunks
         async with session_scope() as session:
+            # A rename during the embedding queued nothing (the document was
+            # still processing), so it is caught here and re-embedded below.
+            renamed = await _current_filename(session, document_id, lock=True) != original_filename
             await session.execute(
                 text(
                     "UPDATE documents SET markdown_text = :t, markdown_storage_path = :p, "
@@ -161,6 +170,10 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
     finally:
         if embedder is not None:
             await embedder.aclose()
+    # Outside the try: the document is indexed by now, and a failure here must
+    # not mark it failed - it keeps the chunks just stored.
+    if renamed:
+        await run_rechunk([document_id])
 
 
 async def run_rechunk(document_ids: list[str]) -> None:
@@ -195,6 +208,11 @@ async def run_rechunk(document_ids: list[str]) -> None:
                     continue
                 embeddings = await _embed_chunks(embedder, chunks, row["original_filename"] or "")
                 async with session_scope() as session:
+                    # Renamed since this began: these vectors carry the old
+                    # name, and the rename has queued its own re-chunk.
+                    if await _current_filename(session, document_id, lock=True) != (row["original_filename"] or ""):
+                        log.info("re-chunking skipped document_id=%s: renamed meanwhile", document_id)
+                        continue
                     await _replace_chunks(session, document_id, chunks, embeddings)
                 done += 1
             except Exception:  # noqa: BLE001 - the old chunks stay; carry on with the rest

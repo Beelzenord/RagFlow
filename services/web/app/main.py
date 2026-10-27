@@ -300,6 +300,18 @@ async def api_document_delete(document_id: UUID, request: Request) -> JSONRespon
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
+class RenameBody(BaseModel):
+    # Ingestion keeps the extension and refuses what is not a name.
+    filename: str = Field(..., min_length=1, max_length=255)
+
+
+@app.patch("/api/documents/{document_id}", dependencies=[Depends(require_admin)])
+async def api_document_rename(document_id: UUID, body: RenameBody, request: Request) -> JSONResponse:
+    return await _forward(
+        request, "PATCH", f"{INGESTION_URL}/documents/{document_id}", json=body.model_dump()
+    )
+
+
 @app.get("/api/documents/{document_id}/file")
 async def api_document_file(document_id: UUID, request: Request, inline: bool = False) -> StreamingResponse:
     """Proxy the original upload from ingestion so the browser can download it,
