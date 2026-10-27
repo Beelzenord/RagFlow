@@ -46,6 +46,9 @@ class NotCoveredTests(unittest.TestCase):
             "Källorna nämner inte någon klädkod.",
             # Seen in the first baseline run.
             "It looks like the sources you provided don't actually include details about a dress code.",
+            # A typographic apostrophe, seen later.
+            "The documents focus on gifts and hospitality, but they don’t specify a dress code.",
+            "I'm sorry, but the sources provided do not explain what sick pay is or how it operates.",
         ):
             with self.subTest(text=text):
                 self.assertTrue(says_not_covered(text))

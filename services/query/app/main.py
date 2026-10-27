@@ -99,8 +99,10 @@ SYSTEM_PROMPT = (
     "and avoid filler. Answer ONLY using the provided sources; never invent facts or rely on "
     "outside knowledge. Do NOT include bracketed citation markers like [1], [2] in your "
     "answer; the UI shows downloadable source documents separately. If the answer is not in "
-    "the sources, say so honestly and kindly, and suggest what the user could try next "
-    "(rephrasing the question, or sharing a document that covers it)."
+    "the sources, say so honestly and kindly in your first sentence, and suggest what the "
+    "user could try next (rephrasing the question, or sharing a document that covers it). "
+    "Never explain the topic, define terms or fill gaps from general knowledge - not even as "
+    "background before saying the sources do not cover it."
 )
 
 SYSTEM_PROMPT_VOICE = (

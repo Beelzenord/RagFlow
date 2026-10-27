@@ -34,11 +34,13 @@ def detect_language(text: str) -> str | None:
 # Ways an answer says the documents do not cover something, plus the service's
 # own fixed reply when nothing is retrieved at all.
 _NOT_COVERED = re.compile(
-    r"(?:n't|\bnot\b|\bno\b|couldn'?t|cannot|can'?t|unable|nothing)"
-    r"[^.?!]{0,90}?\b(?:cover|mention|say|find|found|information|specif|address|state)"
+    # Apostrophes come straight (') or typographic (’).
+    r"(?:n['’]t|\bnot\b|\bno\b|couldn['’]?t|cannot|can['’]?t|unable|nothing)"
+    r"[^.?!]{0,90}?\b(?:cover|mention|say|find|found|information|specif|address|state|explain|describ"
+    r"|discuss|contain|provide|answer)"
     # "don't actually include details about a dress code" - but not "does not
     # include equipment", which is an ordinary answer.
-    r"|(?:n't|\bnot\b)\s+(?:\w+\s+){0,2}includ\w*\s+(?:\w+\s+){0,2}(?:details?|information|anything)\b"
+    r"|(?:n['’]t|\bnot\b)\s+(?:\w+\s+){0,2}includ\w*\s+(?:\w+\s+){0,2}(?:details?|information|anything)\b"
     r"|looked through the indexed documents"
     r"|\b(?:inte|ingen|inga)\b[^.?!]{0,60}?\b(?:nämn|information|uppgift|täck|framgår|står)"
     r"|\b(?:ikke|ingen)\b[^.?!]{0,60}?\b(?:nevn|nævn|informasjon|information|dekk|dæk|står)"
