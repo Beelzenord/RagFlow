@@ -20,6 +20,8 @@ python3 eval/run.py --compare eval/reports/<earlier>.json
 - It talks to the query service on `localhost:8002` and ingestion on `:8001`
   with `SERVICE_API_KEY` from `.env` (never printed). `--seed` refuses anything
   but localhost: test documents never go to a real deployment.
+- Its questions are sent with `"log": false`, so they stay out of the question
+  log and the Dashboard's Insights.
 - A run costs a few cents of LLM time. Reports stay local (`eval/reports/` is
   gitignored), since they quote the answers.
 

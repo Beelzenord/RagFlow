@@ -174,7 +174,8 @@ def restore(ingestion: str, key: str, changed: list[tuple[str, str, dict]]) -> N
 # --- Asking and reporting ----------------------------------------------------------
 
 def ask(query: str, key: str, case: dict) -> dict:
-    body = {"question": case["question"]}
+    # Test questions are not what people ask: kept out of the question log.
+    body = {"question": case["question"], "log": False}
     if case.get("market"):
         body["market"] = case["market"]
     started = time.monotonic()

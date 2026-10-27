@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     # Enough of each passage to judge it; the model needs no more to rank.
     rerank_passage_chars: int = 900
 
+    # The question log behind the Dashboard's Insights (db/migrations/06).
+    # Anonymous; rows older than answer_log_days are deleted.
+    answer_log_enabled: bool = True
+    answer_log_days: int = 90
+
     # Auth
     service_api_key: str = ""
 

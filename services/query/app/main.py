@@ -2,13 +2,15 @@
 already happened during ingestion."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -20,7 +22,24 @@ from rag_shared.llm import LLMClient, Turn
 from rag_shared.security import require_service_key
 from rag_shared.settings import settings
 
-from .language import answer_language_rule
+from .answer_log import (
+    ANSWER_MAX_CHARS,
+    COVERAGE_MAX_TOKENS,
+    COVERAGE_SQL,
+    COVERAGE_SYSTEM,
+    COVERAGE_TIMEOUT_S,
+    FEEDBACK_SQL,
+    INSERT_SQL,
+    INSIGHTS_ROW_CAP,
+    INSIGHTS_SQL,
+    PURGE_SQL,
+    coverage_prompt,
+    group_questions,
+    parse_coverage,
+    sources_of,
+    summarize,
+)
+from .language import answer_language_rule, detect_language
 from .rerank import rerank
 from .audience import (
     AUDIENCE_LABELS_SQL,
@@ -83,10 +102,12 @@ async def lifespan(app: FastAPI):
     app.state.embedder = EmbeddingClient()
     app.state.llm = LLMClient()
     await _warm_retrieval()
+    purge = asyncio.create_task(_purge_answer_log_daily())
     log.info("query service ready (embedder + llm clients initialized)")
     try:
         yield
     finally:
+        purge.cancel()
         await app.state.embedder.aclose()
         await app.state.llm.aclose()
 
@@ -167,6 +188,9 @@ class QueryRequest(BaseModel):
     market: str | None = Field(default=None, pattern=r"^[A-Z]{2}$")
     # Prior turns, oldest first, excluding the current question.
     history: list[ChatTurn] = Field(default_factory=list, max_length=12)
+    # False keeps test traffic (eval/run.py) out of the question log. The web
+    # service never sends it, so the chat cannot opt out of being counted.
+    log: bool = True
 
 
 def _system_prompt_for(req: QueryRequest) -> str:
@@ -247,6 +271,8 @@ class QueryResponse(BaseModel):
     citations: list[Citation]
     # Set only when a follow-up was condensed into a standalone search question.
     search_query: str | None = None
+    # For feedback on this answer (POST /answers/{answer_id}/feedback).
+    answer_id: str | None = None
 
 
 @app.get("/healthz")
@@ -559,8 +585,12 @@ async def query(req: QueryRequest, request: Request) -> QueryResponse:
     citations, user_msg = await _retrieve_and_format(
         req, embedder, search_query=search_query, llm=llm
     )
+    answer_id = _new_answer_id(req)
     if user_msg is None:
-        return QueryResponse(answer=NO_HITS_ANSWER, citations=[], search_query=rewritten)
+        _in_background(_record_answer(answer_id, req, search_query, NO_HITS_ANSWER, [], llm, no_hits=True))
+        return QueryResponse(
+            answer=NO_HITS_ANSWER, citations=[], search_query=rewritten, answer_id=answer_id
+        )
     try:
         answer = await llm.complete(
             _system_prompt_for(req),
@@ -570,8 +600,10 @@ async def query(req: QueryRequest, request: Request) -> QueryResponse:
         )
     except Exception as exc:
         raise HTTPException(502, f"llm call failed: {exc}") from exc
+    answer = answer.strip()
+    _in_background(_record_answer(answer_id, req, search_query, answer, citations, llm))
     return QueryResponse(
-        answer=answer.strip(), citations=citations, search_query=rewritten
+        answer=answer, citations=citations, search_query=rewritten, answer_id=answer_id
     )
 
 
@@ -583,7 +615,7 @@ async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse
       {"type":"rewrite","text":"..."}          # only when a follow-up was condensed
       {"type":"citations","data":[{...}, ...]}
       {"type":"delta","text":"..."}            # zero or more, in order
-      {"type":"done"}
+      {"type":"done","answer_id":"..."}        # answer_id: for feedback on it, when logged
       {"type":"error","message":"..."}         # only on failure mid-stream
     """
     embedder: EmbeddingClient = request.app.state.embedder
@@ -620,11 +652,15 @@ async def _run_stream(
         {"type": "citations", "data": [c.model_dump() for c in citations]}
     )
 
+    answer_id = _new_answer_id(req)
+    done = {"type": "done", "answer_id": answer_id} if answer_id else {"type": "done"}
     if user_msg is None:
         yield _ndjson({"type": "delta", "text": NO_HITS_ANSWER})
-        yield _ndjson({"type": "done"})
+        _in_background(_record_answer(answer_id, req, search_query, NO_HITS_ANSWER, [], llm, no_hits=True))
+        yield _ndjson(done)
         return
 
+    parts: list[str] = []
     try:
         async for chunk in llm.stream(
             _system_prompt_for(req),
@@ -633,10 +669,192 @@ async def _run_stream(
             history=_history_turns(req),
         ):
             if chunk:
+                parts.append(chunk)
                 yield _ndjson({"type": "delta", "text": chunk})
     except Exception as exc:  # noqa: BLE001
         log.exception("llm stream failed")
         yield _ndjson({"type": "error", "message": f"llm call failed: {exc}"})
         return
 
-    yield _ndjson({"type": "done"})
+    # An answer cut short by the person (the stream closed early) never gets
+    # here, so only answers they saw in full are logged. Logged before "done",
+    # so a page that closes the stream on "done" cannot stop it.
+    _in_background(_record_answer(answer_id, req, search_query, "".join(parts).strip(), citations, llm))
+    yield _ndjson(done)
+
+
+# --- The question log (answer_log.py) ---------------------------------------------------
+# Never slows or breaks an answer: it runs after the answer has been sent, in
+# the background, and any failure is a warning. Before migration 06 the table is
+# missing; that is said once and retried every ten minutes.
+
+_LOG_RETRY_SECONDS = 600
+_log_retry_at = 0.0
+# Background tasks are only weakly referenced by the event loop; keep them
+# until they finish.
+_background: set[asyncio.Task] = set()
+
+
+def _new_answer_id(req: QueryRequest) -> str | None:
+    """The id an answer is rated by - none when it is not logged (the log is
+    off, or the caller asked), so nothing offers a rating that would go nowhere."""
+    return str(uuid.uuid4()) if settings.answer_log_enabled and req.log else None
+
+
+def _in_background(coro: Any) -> None:
+    task = asyncio.create_task(coro)
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+
+
+def _undefined_table(exc: ProgrammingError) -> bool:
+    orig = exc.orig
+    return (getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)) == "42P01"
+
+
+async def _record_answer(
+    answer_id: str | None,
+    req: QueryRequest,
+    search_query: str,
+    answer: str,
+    citations: list[Citation],
+    llm: LLMClient,
+    no_hits: bool = False,
+) -> None:
+    """Store one answer, then check whether it answered the question."""
+    global _log_retry_at
+    if answer_id is None or time.monotonic() < _log_retry_at:
+        return
+    try:
+        async with session_scope() as session:
+            await session.execute(
+                text(INSERT_SQL),
+                {
+                    "id": answer_id,
+                    "question": req.question,
+                    "search_query": search_query if search_query != req.question else None,
+                    "lang": req.lang or detect_language(req.question),
+                    "market": None if req.document_id else req.market,
+                    "document_id": req.document_id,
+                    "voice": bool(req.voice),
+                    "answer": answer[:ANSWER_MAX_CHARS],
+                    "sources": json.dumps(sources_of(citations)),
+                    "coverage": "no_hits" if no_hits else None,
+                },
+            )
+    except ProgrammingError as exc:
+        if not _undefined_table(exc):
+            log.warning("could not log an answer: %s", exc)
+            return
+        log.warning("answer_log table missing - questions are not being logged (apply migration 06)")
+        _log_retry_at = time.monotonic() + _LOG_RETRY_SECONDS
+        return
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not log an answer: %s", exc)
+        return
+    if no_hits or not answer:
+        return
+    try:
+        reply = await llm.complete(
+            COVERAGE_SYSTEM,
+            coverage_prompt(req.question, answer),
+            max_tokens=COVERAGE_MAX_TOKENS,
+            temperature=0,
+            timeout=COVERAGE_TIMEOUT_S,
+        )
+        coverage = parse_coverage(reply)
+        if coverage:
+            async with session_scope() as session:
+                await session.execute(text(COVERAGE_SQL), {"coverage": coverage, "id": answer_id})
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not check whether an answer answered: %s", exc)
+
+
+async def _purge_answer_log() -> None:
+    try:
+        async with session_scope() as session:
+            result = await session.execute(text(PURGE_SQL), {"days": settings.answer_log_days})
+        if result.rowcount:
+            log.info("deleted %d logged answers older than %d days", result.rowcount, settings.answer_log_days)
+    except ProgrammingError as exc:
+        if not _undefined_table(exc):
+            log.warning("could not purge the question log: %s", exc)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not purge the question log: %s", exc)
+
+
+async def _purge_answer_log_daily() -> None:
+    # Runs even with the log turned off, so turning it off also clears it out.
+    while True:
+        await _purge_answer_log()
+        await asyncio.sleep(24 * 3600)
+
+
+class FeedbackBody(BaseModel):
+    rating: Literal[1, -1]
+    comment: str | None = Field(default=None, max_length=500)
+
+
+@app.post("/answers/{answer_id}/feedback", dependencies=[Depends(require_service_key)])
+async def answer_feedback(answer_id: uuid.UUID, body: FeedbackBody) -> dict[str, Any]:
+    """A thumb up or down on one answer, with an optional word on what was missing."""
+    if not settings.answer_log_enabled:
+        raise HTTPException(404, "the question log is turned off")
+    comment = " ".join((body.comment or "").split())[:500] or None
+    for _ in range(3):
+        try:
+            async with session_scope() as session:
+                result = await session.execute(
+                    text(FEEDBACK_SQL), {"rating": body.rating, "comment": comment, "id": str(answer_id)}
+                )
+        except ProgrammingError as exc:
+            if _undefined_table(exc):
+                raise HTTPException(503, "the question log is not set up (apply migration 06)") from None
+            raise
+        if result.rowcount:
+            return {"ok": True}
+        # The row is written just after the answer; a very quick click can beat it.
+        await asyncio.sleep(1)
+    raise HTTPException(404, "answer not found")
+
+
+@app.get("/insights", dependencies=[Depends(require_service_key)])
+async def insights(
+    days: int = Query(default=30, ge=1, le=365),
+    market: str = Query(default="", pattern=r"^([A-Z]{2}|none)?$"),
+    kind: Literal["attention", "all"] = "attention",
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    """What people asked over `days`: totals, and the questions grouped - by
+    default only those that were not (fully) answered or got a thumbs down.
+    `market` narrows to questions asked for one market, or "none" for those
+    asked for all markets."""
+    clause, params = "", {"days": days, "cap": INSIGHTS_ROW_CAP}
+    if market == "none":
+        clause = "AND market IS NULL"
+    elif market:
+        clause, params["market"] = "AND market = :market", market
+    try:
+        async with session_scope() as session:
+            found = (await session.execute(text(INSIGHTS_SQL.format(market=clause)), params)).mappings().all()
+    except ProgrammingError as exc:
+        if not _undefined_table(exc):
+            raise
+        return {"enabled": settings.answer_log_enabled, "ready": False, "days": days, "market": market,
+                "summary": summarize([]), "groups": [], "truncated": False}
+    rows = []
+    for r in found:
+        row = dict(r)
+        if isinstance(row.get("sources"), str):
+            row["sources"] = json.loads(row["sources"])
+        rows.append(row)
+    return {
+        "enabled": settings.answer_log_enabled,
+        "ready": True,
+        "days": days,
+        "market": market,
+        "retention_days": settings.answer_log_days,
+        "summary": summarize(rows),
+        "groups": group_questions(rows, attention_only=kind == "attention")[:limit],
+        "truncated": len(rows) >= INSIGHTS_ROW_CAP,
+    }

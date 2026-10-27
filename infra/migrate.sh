@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply 01-extensions.sql, 02-schema.sql and 05-markets.sql to a Flexible Server
+# Apply 01-extensions.sql, 02-schema.sql, 05-markets.sql and 06-answer-log.sql to a Flexible Server
 # database. 03 and 04 are upgrades for an old local volume — 02 already has those
 # objects. Every file is idempotent, so re-running this upgrades an existing
 # database too.
@@ -37,6 +37,7 @@ run_sql() {
 run_sql "$REPO_ROOT/db/migrations/01-extensions.sql"
 run_sql "$REPO_ROOT/db/migrations/02-schema.sql"
 run_sql "$REPO_ROOT/db/migrations/05-markets.sql"
+run_sql "$REPO_ROOT/db/migrations/06-answer-log.sql"
 
 echo "→ verify extensions, columns and market tables"
 VERIFY='SELECT extname FROM pg_extension ORDER BY 1;
