@@ -20,6 +20,8 @@ from rag_shared.llm import LLMClient, Turn
 from rag_shared.security import require_service_key
 from rag_shared.settings import settings
 
+from .language import answer_language_rule
+from .rerank import rerank
 from .audience import (
     AUDIENCE_LABELS_SQL,
     MARKET_NAME_SQL,
@@ -97,8 +99,10 @@ SYSTEM_PROMPT = (
     "and avoid filler. Answer ONLY using the provided sources; never invent facts or rely on "
     "outside knowledge. Do NOT include bracketed citation markers like [1], [2] in your "
     "answer; the UI shows downloadable source documents separately. If the answer is not in "
-    "the sources, say so honestly and kindly, and suggest what the user could try next "
-    "(rephrasing the question, or sharing a document that covers it)."
+    "the sources, say so honestly and kindly in your first sentence, and suggest what the "
+    "user could try next (rephrasing the question, or sharing a document that covers it). "
+    "Never explain the topic, define terms or fill gaps from general knowledge - not even as "
+    "background before saying the sources do not cover it."
 )
 
 SYSTEM_PROMPT_VOICE = (
@@ -165,16 +169,6 @@ class QueryRequest(BaseModel):
     history: list[ChatTurn] = Field(default_factory=list, max_length=12)
 
 
-# Human-readable names so we can ask the model to answer in that language.
-LANG_NAMES: dict[str, str] = {
-    "en": "English",
-    "sv": "Swedish",
-    "nb": "Norwegian (Bokmål)",
-    "fi": "Finnish",
-    "da": "Danish",
-}
-
-
 def _system_prompt_for(req: QueryRequest) -> str:
     base = SYSTEM_PROMPT_VOICE if req.voice else SYSTEM_PROMPT
     if req.history:
@@ -183,10 +177,9 @@ def _system_prompt_for(req: QueryRequest) -> str:
             "understand what the user is referring to, but ground every fact in the sources "
             "provided with the current question."
         )
-    name = LANG_NAMES.get((req.lang or "").lower())
-    if name:
-        return f"{base} Answer in {name}."
-    return base
+    # Always last, so nothing after it - sources in Swedish, a market in Norway -
+    # can pull the answer into another language.
+    return f"{base} {answer_language_rule(req.question, req.lang)}"
 
 
 def _max_tokens_for(req: QueryRequest) -> int:
@@ -347,6 +340,7 @@ async def _retrieve_and_format(
     req: QueryRequest,
     embedder: EmbeddingClient,
     search_query: str | None = None,
+    llm: LLMClient | None = None,
 ) -> tuple[list[Citation], str | None]:
     """Run hybrid retrieval and build the LLM user prompt.
 
@@ -375,13 +369,17 @@ async def _retrieve_and_format(
         raise HTTPException(502, f"embedding failed: {exc}") from exc
 
     top_k = req.top_k or settings.retrieval_top_k
+    # With re-ranking, a wider fused pool goes to the model, which picks the
+    # top_k; without it, the fused order is cut straight to top_k.
+    reranking = settings.rerank_provider == "llm" and llm is not None
+    limit = max(top_k, settings.rerank_pool) if reranking else top_k
     where, params = _build_filter(req)
     params.update(
         {
             "q": str(q_vec),
             "qtext": query_text,
             "pool": max(top_k, settings.retrieval_pool_size),
-            "k": top_k,
+            "limit": limit,
             "rrf_k": settings.retrieval_rrf_k,
             "min_score": settings.retrieval_min_score,
             "df_cap": _DF_CAP,
@@ -440,7 +438,7 @@ async def _retrieve_and_format(
         JOIN documents d ON d.id = c.document_id
         WHERE f.in_lexical OR (1 - (c.embedding <=> :q)) >= :min_score
         ORDER BY f.rrf DESC
-        LIMIT :k
+        LIMIT :limit
     """
     async with session_scope() as session:
         rows = (await session.execute(text(sql), params)).mappings().all()
@@ -449,6 +447,14 @@ async def _retrieve_and_format(
         return [], None
 
     audiences, chosen_market = await _audience_context(rows, req)
+    if reranking:
+        labels = [prompt_label(audiences.get(str(r["document_id"]))) for r in rows]
+        rows = await rerank(
+            llm, query_text, rows, labels, top_k,
+            timeout=settings.rerank_timeout_s, max_chars=settings.rerank_passage_chars,
+        )
+    else:
+        rows = rows[:top_k]
     return _format_sources(req, rows, audiences, chosen_market)
 
 
@@ -551,7 +557,7 @@ async def query(req: QueryRequest, request: Request) -> QueryResponse:
     search_query = await _rewrite_question(req, llm)
     rewritten = search_query if search_query != req.question else None
     citations, user_msg = await _retrieve_and_format(
-        req, embedder, search_query=search_query
+        req, embedder, search_query=search_query, llm=llm
     )
     if user_msg is None:
         return QueryResponse(answer=NO_HITS_ANSWER, citations=[], search_query=rewritten)
@@ -604,7 +610,7 @@ async def _run_stream(
 
     try:
         citations, user_msg = await _retrieve_and_format(
-            req, embedder, search_query=search_query
+            req, embedder, search_query=search_query, llm=llm
         )
     except HTTPException as exc:
         yield _ndjson({"type": "error", "message": str(exc.detail)})

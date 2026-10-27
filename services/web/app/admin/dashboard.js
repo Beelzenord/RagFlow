@@ -1016,6 +1016,13 @@ function viewSub(view) {
 }
 
 function viewActions(view) {
+  if (view.kind === "all") {
+    return [
+      moreMenu(t("dashboard.moreActions", { name: t("dashboard.allDocuments") }), [
+        { label: t("dashboard.reindexAll"), icon: "all", run: reindexAll },
+      ]),
+    ];
+  }
   if (view.kind === "country") {
     const name = countryName(view.key);
     return [
@@ -1067,6 +1074,27 @@ function scopeSwitch(view) {
     button("limited", t("dashboard.limitedTo", { name }), t("dashboard.limitedHint", { name })),
     button("sees", t("dashboard.everythingSees", { name }), t("dashboard.seesHint", { name })),
   );
+}
+
+// --- Re-indexing ---------------------------------------------------------------------
+// After a change to how documents are split for search: every document's chunks
+// are rebuilt from the text already extracted. Nothing is parsed again, and
+// documents keep answering with their old chunks until the new ones are in.
+
+async function reindexAll() {
+  const ok = await confirmAction({
+    title: t("dashboard.reindexTitle"),
+    body: t("dashboard.reindexBody"),
+    confirm: t("dashboard.reindex"),
+  });
+  if (!ok) return;
+  try {
+    const data = await api("/api/documents/rechunk-all", { method: "POST" });
+    const n = data?.queued ?? 0;
+    flash(n ? t("dashboard.reindexStarted", { n }) : t("dashboard.reindexNothing"));
+  } catch (err) {
+    flash(err.message, "error");
+  }
 }
 
 // --- Markets: removing one ---------------------------------------------------------

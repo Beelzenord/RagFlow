@@ -114,7 +114,7 @@ class MarketGuidanceTests(unittest.TestCase):
 
     def test_with_a_chosen_market_the_answer_is_for_it(self) -> None:
         text = market_guidance("Sweden")
-        self.assertIn("The person asking is in Sweden. Answer for Sweden.", text)
+        self.assertIn("The person asking works in Sweden: answer with Sweden's rules.", text)
         self.assertNotIn("has not chosen", text)
 
 

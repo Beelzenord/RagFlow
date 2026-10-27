@@ -246,5 +246,11 @@
   "dashboard.undo": "Angre",
   "dashboard.undoFailed": "{failed} av {total} kunne ikke settes tilbake.",
   "dashboard.undone": "Satt tilbake.",
-  "dashboard.uploadOptions": "Opplastingsvalg"
+  "dashboard.uploadOptions": "Opplastingsvalg",
+  "dashboard.reindexAll": "Indekser alle dokumenter på nytt...",
+  "dashboard.reindexTitle": "Indeksere alle dokumenter på nytt?",
+  "dashboard.reindexBody": "Bygger opp på nytt hvordan hvert dokument deles opp for søk, ut fra teksten som allerede er hentet ut. Ingenting tolkes på nytt, og svarene fungerer i mellomtiden.",
+  "dashboard.reindex": "Indekser på nytt",
+  "dashboard.reindexStarted": { "one": "Indekserer {n} dokument på nytt i bakgrunnen.", "other": "Indekserer {n} dokumenter på nytt i bakgrunnen." },
+  "dashboard.reindexNothing": "Ingen indekserte dokumenter å indeksere på nytt."
 }

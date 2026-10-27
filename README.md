@@ -107,6 +107,18 @@ Response:
 }
 ```
 
+**How an answer is found.** Two retrievers search the documents the question
+may draw on: one by meaning (vectors), one by exact words (useful for invoice
+numbers and codes). Their rankings are fused. With `RERANK_PROVIDER=llm` (the
+default) the top 20 then go to the chat model, which picks the ones that
+actually answer the question before the cut to six. That brought Sweden's
+anchor-day paragraph - ranked 7th behind six chunks of the vacation policy -
+into the answer, at about a second per question. It fails open: a slow or
+broken reply keeps the fused order. The answer is always written in the
+language of the question, whatever language the sources are in.
+
+To check a change to any of this, run the answer evaluation: `eval/README.md`.
+
 ## n8n workflows
 
 In the n8n UI (http://localhost:5678) → **Workflows → Import from File** and

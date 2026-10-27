@@ -246,5 +246,11 @@
   "dashboard.undo": "Ångra",
   "dashboard.undoFailed": "{failed} av {total} kunde inte återställas.",
   "dashboard.undone": "Återställt.",
-  "dashboard.uploadOptions": "Uppladdningsalternativ"
+  "dashboard.uploadOptions": "Uppladdningsalternativ",
+  "dashboard.reindexAll": "Indexera om alla dokument...",
+  "dashboard.reindexTitle": "Indexera om alla dokument?",
+  "dashboard.reindexBody": "Bygger om hur varje dokument delas upp för sökning, utifrån texten som redan har tagits fram. Inget tolkas om, och svaren fungerar under tiden.",
+  "dashboard.reindex": "Indexera om",
+  "dashboard.reindexStarted": { "one": "Indexerar om {n} dokument i bakgrunden.", "other": "Indexerar om {n} dokument i bakgrunden." },
+  "dashboard.reindexNothing": "Inga indexerade dokument att indexera om."
 }

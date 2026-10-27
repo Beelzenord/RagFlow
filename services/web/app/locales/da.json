@@ -246,5 +246,11 @@
   "dashboard.undo": "Fortryd",
   "dashboard.undoFailed": "{failed} af {total} kunne ikke sættes tilbage.",
   "dashboard.undone": "Sat tilbage.",
-  "dashboard.uploadOptions": "Uploadindstillinger"
+  "dashboard.uploadOptions": "Uploadindstillinger",
+  "dashboard.reindexAll": "Genindekser alle dokumenter...",
+  "dashboard.reindexTitle": "Genindeksere alle dokumenter?",
+  "dashboard.reindexBody": "Genopbygger, hvordan hvert dokument deles op til søgning, ud fra den tekst, der allerede er trukket ud. Intet fortolkes igen, og svarene virker imens.",
+  "dashboard.reindex": "Genindekser",
+  "dashboard.reindexStarted": { "one": "Genindekserer {n} dokument i baggrunden.", "other": "Genindekserer {n} dokumenter i baggrunden." },
+  "dashboard.reindexNothing": "Ingen indekserede dokumenter at genindeksere."
 }

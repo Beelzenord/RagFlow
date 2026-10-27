@@ -246,5 +246,11 @@
   "dashboard.undo": "Undo",
   "dashboard.undoFailed": "{failed} of {total} could not be put back.",
   "dashboard.undone": "Put back.",
-  "dashboard.uploadOptions": "Upload options"
+  "dashboard.uploadOptions": "Upload options",
+  "dashboard.reindexAll": "Re-index all documents...",
+  "dashboard.reindexTitle": "Re-index all documents?",
+  "dashboard.reindexBody": "Rebuilds how every document is split for search, from the text already extracted. Nothing is parsed again, and answers keep working meanwhile.",
+  "dashboard.reindex": "Re-index",
+  "dashboard.reindexStarted": { "one": "Re-indexing {n} document in the background.", "other": "Re-indexing {n} documents in the background." },
+  "dashboard.reindexNothing": "No indexed documents to re-index."
 }

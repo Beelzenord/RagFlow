@@ -36,7 +36,7 @@ from .audience import (
     who_filter,
 )
 from .countries import ISO_COUNTRIES
-from .pipeline import run_ingestion
+from .pipeline import run_ingestion, run_rechunk
 from .storage import resolve_storage_file, save_original
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -692,6 +692,30 @@ async def reprocess(document_id: UUID, background: BackgroundTasks) -> dict[str,
         )
     background.add_task(run_ingestion, str(document_id), storage_path, file_type or "")
     return {"document_id": str(document_id), "status": "processing"}
+
+
+@app.post("/documents/rechunk-all", dependencies=[Depends(require_service_key)])
+async def rechunk_all(background: BackgroundTasks) -> dict[str, Any]:
+    """Rebuild every indexed document's chunks from its stored markdown - after
+    a change to the chunker - without parsing anything again: no LlamaParse,
+    embeddings only. Documents keep answering with their old chunks until each
+    one's new chunks replace them."""
+    async with session_scope() as session:
+        ids = [
+            str(r)
+            for r in (
+                await session.execute(
+                    text(
+                        "SELECT id FROM documents WHERE status IN ('completed', 'degraded') "
+                        "AND coalesce(markdown_text, '') <> '' ORDER BY created_at"
+                    )
+                )
+            ).scalars()
+        ]
+    if ids:
+        background.add_task(run_rechunk, ids)
+    log.info("rechunk-all queued %d documents", len(ids))
+    return {"queued": len(ids)}
 
 
 @app.post("/documents/reprocess-all", dependencies=[Depends(require_service_key)])

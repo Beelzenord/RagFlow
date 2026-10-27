@@ -45,6 +45,53 @@ async def _finish_job(session, job_id: str, status: str, error: str | None = Non
     )
 
 
+async def _embed_chunks(embedder: EmbeddingClient, chunks: list, original_filename: str) -> list[list[float]]:
+    """Batched. The embedding input is enriched with filename + heading so the
+    vector "knows" where the chunk sits; the stored `content` column stays raw
+    so the LLM prompt is unchanged."""
+    BATCH = 64
+    embeddings: list[list[float]] = []
+    for i in range(0, len(chunks), BATCH):
+        batch = [
+            (
+                f"{original_filename}\n# {c.heading}\n\n{c.content}"
+                if c.heading
+                else f"{original_filename}\n\n{c.content}"
+            )
+            for c in chunks[i : i + BATCH]
+        ]
+        embeddings.extend(await embedder.embed(batch))
+    return embeddings
+
+
+async def _replace_chunks(session, document_id: str, chunks: list, embeddings: list[list[float]]) -> None:
+    """Swap a document's chunks for new ones, inside the caller's transaction,
+    so a question never sees half of each."""
+    await session.execute(
+        text("DELETE FROM document_chunks WHERE document_id = :d"),
+        {"d": document_id},
+    )
+    for chunk, vec in zip(chunks, embeddings):
+        await session.execute(
+            text(
+                "INSERT INTO document_chunks "
+                "(document_id, chunk_index, page_number, heading, content, "
+                " token_count, embedding, metadata) "
+                "VALUES (:d, :i, :p, :h, :c, :t, :e, CAST(:m AS jsonb))"
+            ),
+            {
+                "d": document_id,
+                "i": chunk.index,
+                "p": chunk.page_number,
+                "h": chunk.heading,
+                "c": chunk.content,
+                "t": chunk.token_count,
+                "e": str(vec),  # pgvector accepts the textual "[..]" form
+                "m": "{}",
+            },
+        )
+
+
 async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> None:
     """Top-level pipeline. Always finalizes the document + job rows, even on failure."""
     job_id: str | None = None
@@ -79,29 +126,12 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
         if not chunks:
             raise RuntimeError("Chunker produced no chunks")
 
-        # 4. Embed (batched). The embedding input is enriched with filename +
-        # heading so the vector "knows" where the chunk sits; the stored
-        # `content` column stays raw so the LLM prompt is unchanged.
+        # 4. Embed
         embedder = EmbeddingClient()
-        BATCH = 64
-        embeddings: list[list[float]] = []
-        for i in range(0, len(chunks), BATCH):
-            batch = [
-                (
-                    f"{original_filename}\n# {c.heading}\n\n{c.content}"
-                    if c.heading
-                    else f"{original_filename}\n\n{c.content}"
-                )
-                for c in chunks[i : i + BATCH]
-            ]
-            embeddings.extend(await embedder.embed(batch))
+        embeddings = await _embed_chunks(embedder, chunks, original_filename)
 
         # 5. Persist atomically: wipe old chunks, insert markdown + new chunks
         async with session_scope() as session:
-            await session.execute(
-                text("DELETE FROM document_chunks WHERE document_id = :d"),
-                {"d": document_id},
-            )
             await session.execute(
                 text(
                     "UPDATE documents SET markdown_text = :t, markdown_storage_path = :p, "
@@ -114,25 +144,7 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
                     "id": document_id,
                 },
             )
-            for chunk, vec in zip(chunks, embeddings):
-                await session.execute(
-                    text(
-                        "INSERT INTO document_chunks "
-                        "(document_id, chunk_index, page_number, heading, content, "
-                        " token_count, embedding, metadata) "
-                        "VALUES (:d, :i, :p, :h, :c, :t, :e, CAST(:m AS jsonb))"
-                    ),
-                    {
-                        "d": document_id,
-                        "i": chunk.index,
-                        "p": chunk.page_number,
-                        "h": chunk.heading,
-                        "c": chunk.content,
-                        "t": chunk.token_count,
-                        "e": str(vec),  # pgvector accepts the textual "[..]" form
-                        "m": "{}",
-                    },
-                )
+            await _replace_chunks(session, document_id, chunks, embeddings)
             await _set_doc_status(
                 session, document_id, "degraded" if parsed.degraded else "completed"
             )
@@ -149,3 +161,45 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
     finally:
         if embedder is not None:
             await embedder.aclose()
+
+
+async def run_rechunk(document_ids: list[str]) -> None:
+    """Rebuild the chunks of these documents from the markdown already stored -
+    after a change to chunking - without parsing anything again, so it costs
+    embeddings only.
+
+    One document at a time, to keep the embedding rate gentle. A document keeps
+    its status throughout, so it goes on answering questions with its old
+    chunks until the new ones replace them in one transaction; one that fails
+    simply keeps the old chunks.
+    """
+    embedder = EmbeddingClient()
+    done = failed = 0
+    try:
+        for document_id in document_ids:
+            try:
+                async with session_scope() as session:
+                    row = (
+                        await session.execute(
+                            text(
+                                "SELECT original_filename, markdown_text FROM documents "
+                                "WHERE id = :id AND status IN ('completed', 'degraded')"
+                            ),
+                            {"id": document_id},
+                        )
+                    ).mappings().first()
+                if not row or not (row["markdown_text"] or "").strip():
+                    continue
+                chunks = chunk_markdown(row["markdown_text"])
+                if not chunks:
+                    continue
+                embeddings = await _embed_chunks(embedder, chunks, row["original_filename"] or "")
+                async with session_scope() as session:
+                    await _replace_chunks(session, document_id, chunks, embeddings)
+                done += 1
+            except Exception:  # noqa: BLE001 - the old chunks stay; carry on with the rest
+                failed += 1
+                log.exception("re-chunking failed document_id=%s", document_id)
+    finally:
+        await embedder.aclose()
+    log.info("re-chunking finished: %d rebuilt, %d failed", done, failed)

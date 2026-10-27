@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator, Literal, Sequence
+from typing import Any, AsyncIterator, Literal, Sequence
 
 import httpx
 
@@ -60,8 +60,14 @@ class LLMClient:
         user: str,
         max_tokens: int = 1024,
         history: Sequence[Turn] | None = None,
+        temperature: float | None = None,
+        timeout: float | None = None,
     ) -> str:
+        """One reply. `temperature` 0 makes it repeatable (re-ranking, checks);
+        `timeout` overrides the client's generous default for quick calls."""
         messages = self._messages(system, user, history)
+        extra: dict[str, Any] = {} if temperature is None else {"temperature": temperature}
+        request_timeout = timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT
         if self._provider == "anthropic":
             resp = await self._client.post(
                 "/v1/messages",
@@ -70,7 +76,9 @@ class LLMClient:
                     "max_tokens": max_tokens,
                     "system": system,
                     "messages": messages,
+                    **extra,
                 },
+                timeout=request_timeout,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -82,7 +90,9 @@ class LLMClient:
                 "model": self._model,
                 "max_tokens": max_tokens,
                 "messages": messages,
+                **extra,
             },
+            timeout=request_timeout,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
