@@ -130,6 +130,7 @@ EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_DIM=1536
 EMBEDDING_API_KEY=secretref:embedding-api-key
 EMBEDDING_BASE_URL=https://api.openai.com/v1
+RERANK_PROVIDER=${RERANK_PROVIDER-llm}
 STORAGE_DIR=/data/storage
 LLAMA_CLOUD_API_KEY=secretref:llama-cloud-api-key
 SERVICE_API_KEY=secretref:service-api-key

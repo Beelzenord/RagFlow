@@ -65,6 +65,15 @@ class Settings(BaseSettings):
     # Lexical search ignores any term appearing in more than this share of
     # chunks. It is there to find identifiers, not to re-do semantic search.
     retrieval_lexical_max_df: float = 0.02
+    # Re-ranking. With "llm", the fused candidates (rerank_pool of them) are
+    # put to the chat model, which picks the ones that answer the question
+    # before the cut to retrieval_top_k. "none" keeps the fused order. It fails
+    # open: a slow or broken reply leaves the fused order in place.
+    rerank_provider: Literal["none", "llm"] = "none"
+    rerank_pool: int = 20
+    rerank_timeout_s: float = 6.0
+    # Enough of each passage to judge it; the model needs no more to rank.
+    rerank_passage_chars: int = 900
 
     # Auth
     service_api_key: str = ""
