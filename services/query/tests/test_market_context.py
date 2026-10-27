@@ -76,7 +76,7 @@ class FormatSourcesTests(unittest.TestCase):
     def test_the_chosen_market_is_named(self) -> None:
         audiences = {DOC_SE: {"countries": [{"code": "SE", "name": "Sweden"}], "groups": []}}
         _, user_msg = main._format_sources(self.req, self.rows, audiences, "Sweden")
-        self.assertIn("The person asking is in Sweden. Answer for Sweden.", user_msg)
+        self.assertIn("The person asking works in Sweden: answer with Sweden's rules.", user_msg)
 
 
 class _Orig(Exception):

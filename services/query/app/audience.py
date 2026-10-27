@@ -122,7 +122,10 @@ def market_guidance(chosen_market: str | None) -> str:
         "the rest.",
     ]
     if chosen_market:
-        lines.append(f"- The person asking is in {chosen_market}. Answer for {chosen_market}.")
+        lines.append(
+            f"- The person asking works in {chosen_market}: answer with {chosen_market}'s rules. "
+            "That is about which rules apply, not which language to write in."
+        )
     else:
         lines.append(
             "- The person asking has not chosen a market. If the answer differs between "

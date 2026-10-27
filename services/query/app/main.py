@@ -20,6 +20,7 @@ from rag_shared.llm import LLMClient, Turn
 from rag_shared.security import require_service_key
 from rag_shared.settings import settings
 
+from .language import answer_language_rule
 from .audience import (
     AUDIENCE_LABELS_SQL,
     MARKET_NAME_SQL,
@@ -165,16 +166,6 @@ class QueryRequest(BaseModel):
     history: list[ChatTurn] = Field(default_factory=list, max_length=12)
 
 
-# Human-readable names so we can ask the model to answer in that language.
-LANG_NAMES: dict[str, str] = {
-    "en": "English",
-    "sv": "Swedish",
-    "nb": "Norwegian (Bokmål)",
-    "fi": "Finnish",
-    "da": "Danish",
-}
-
-
 def _system_prompt_for(req: QueryRequest) -> str:
     base = SYSTEM_PROMPT_VOICE if req.voice else SYSTEM_PROMPT
     if req.history:
@@ -183,10 +174,9 @@ def _system_prompt_for(req: QueryRequest) -> str:
             "understand what the user is referring to, but ground every fact in the sources "
             "provided with the current question."
         )
-    name = LANG_NAMES.get((req.lang or "").lower())
-    if name:
-        return f"{base} Answer in {name}."
-    return base
+    # Always last, so nothing after it - sources in Swedish, a market in Norway -
+    # can pull the answer into another language.
+    return f"{base} {answer_language_rule(req.question, req.lang)}"
 
 
 def _max_tokens_for(req: QueryRequest) -> int:
