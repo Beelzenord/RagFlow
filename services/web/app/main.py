@@ -16,7 +16,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 import httpx
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -31,6 +31,10 @@ INGESTION_URL = os.environ.get("INGESTION_URL", "http://ingestion:8001").rstrip(
 QUERY_URL = os.environ.get("QUERY_URL", "http://query:8002").rstrip("/")
 SERVICE_API_KEY = os.environ.get("SERVICE_API_KEY", "")
 HTTP_TIMEOUT = float(os.environ.get("WEB_HTTP_TIMEOUT", "120"))
+# The question log is the query service's; the web service only tells the chat
+# about it - the note under the composer, and whether answers can be rated.
+ANSWER_LOG_ENABLED = os.environ.get("ANSWER_LOG_ENABLED", "true").strip().lower() not in ("", "0", "false", "no", "off")
+ANSWER_LOG_DAYS = int(os.environ.get("ANSWER_LOG_DAYS", "90"))
 
 STATIC_DIR = Path(__file__).parent / "static"
 # Deliberately outside STATIC_DIR: everything in there is served to any
@@ -105,6 +109,9 @@ async def api_me(request: Request) -> JSONResponse:
             "voice_enabled": voice.enabled() and auth.is_admin(request),
             # The voice picker's options; empty whenever the microphone is hidden.
             "voice_languages": voice.VOICE_LANGUAGES if voice.enabled() and auth.is_admin(request) else [],
+            # How long questions are kept, for the note under the composer;
+            # None when they are not logged at all.
+            "question_log_days": ANSWER_LOG_DAYS if ANSWER_LOG_ENABLED else None,
         }
     )
 
@@ -182,7 +189,8 @@ async def _forward(request: Request, method: str, url: str, **kwargs: Any) -> JS
     try:
         resp = await client.request(method, url, headers=_auth_headers(), **kwargs)
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"ingestion service unreachable: {exc}") from exc
+        service = "query" if url.startswith(QUERY_URL) else "ingestion"
+        raise HTTPException(502, f"{service} service unreachable: {exc}") from exc
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
@@ -595,6 +603,37 @@ async def api_query_stream(body: QueryBody, request: Request) -> StreamingRespon
             ).encode("utf-8")
 
     return StreamingResponse(upstream(), media_type="application/x-ndjson")
+
+
+# --- The question log --------------------------------------------------------------
+
+
+class FeedbackBody(BaseModel):
+    rating: Literal[1, -1]
+    comment: str | None = Field(default=None, max_length=500)
+
+
+@app.post("/api/answers/{answer_id}/feedback")
+async def api_answer_feedback(answer_id: UUID, body: FeedbackBody, request: Request) -> JSONResponse:
+    """A thumb up or down on one answer. Open to everyone signed in - a reader's
+    rating is the point - and anonymous: who rated is not passed on."""
+    return await _forward(
+        request, "POST", f"{QUERY_URL}/answers/{answer_id}/feedback", json=body.model_dump()
+    )
+
+
+@app.get("/api/insights", dependencies=[Depends(require_admin)])
+async def api_insights(
+    request: Request,
+    days: int = Query(default=30, ge=1, le=365),
+    market: str = Query(default="", pattern=r"^([A-Z]{2}|none)?$"),
+    kind: Literal["attention", "all"] = "attention",
+    limit: int = Query(default=100, ge=1, le=500),
+) -> JSONResponse:
+    """What people asked and what the documents did not answer - the
+    Dashboard's Insights. Admin-only: the questions describe the corpus's gaps."""
+    params = {"days": days, "market": market, "kind": kind, "limit": limit}
+    return await _forward(request, "GET", f"{QUERY_URL}/insights", params=params)
 
 
 MAX_VOICE_UPLOAD_BYTES = int(os.environ.get("MAX_VOICE_UPLOAD_BYTES", str(25 * 1024 * 1024)))

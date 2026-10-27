@@ -109,6 +109,9 @@ web_env=(
   "SERVICE_API_KEY=secretref:service-api-key"
   "WEB_HTTP_TIMEOUT=120"
   "AUTH_MODE=$AUTH_MODE"
+  # The query service keeps the log; the chat only says so (and offers ratings).
+  "ANSWER_LOG_ENABLED=${ANSWER_LOG_ENABLED:-true}"
+  "ANSWER_LOG_DAYS=${ANSWER_LOG_DAYS:-90}"
   "SESSION_COOKIE_SECURE=1"
 )
 if [[ "$AUTH_MODE" == "password" ]]; then

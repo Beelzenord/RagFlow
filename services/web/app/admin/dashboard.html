@@ -69,6 +69,13 @@
         </div>
         <ul class="rail-list" id="rail-countries"></ul>
       </section>
+      <!-- Not a market: what people ask, read back from the question log. -->
+      <section class="rail-section" aria-labelledby="rail-questions-title">
+        <div class="rail-section-head">
+          <h2 id="rail-questions-title" data-i18n="dashboard.questionsHeading">Questions</h2>
+        </div>
+        <ul class="rail-list" id="rail-insights"></ul>
+      </section>
       <p class="rail-tip" data-i18n="dashboard.dragHint">Tip: drag documents onto a market to make them for it.</p>
     </nav>
     <div class="rail-scrim" id="rail-scrim" hidden></div>
@@ -86,7 +93,7 @@
         <div class="view-sub" id="view-sub"></div>
       </header>
 
-      <div class="toolbar">
+      <div class="toolbar" id="toolbar">
         <label class="search-box">
           <span class="search-icon" id="search-icon" aria-hidden="true"></span>
           <input type="search" id="doc-search" placeholder="Search by name"
@@ -161,6 +168,9 @@
           </div>
         </div>
       </div>
+
+      <!-- #insights: in place of the toolbar and the table. -->
+      <section class="insights" id="insights" hidden aria-labelledby="view-name"></section>
     </main>
 
     <aside class="drawer" id="detail" hidden aria-labelledby="detail-name">

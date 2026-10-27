@@ -350,10 +350,10 @@ class SpokenTurnOrderingTests(unittest.TestCase):
     two network endpoints stubbed.
     """
 
-    def run_turn(self, deltas: list[str]) -> tuple[list[dict], FakeSocket]:
+    def run_turn(self, deltas: list[str], done: dict | None = None) -> tuple[list[dict], FakeSocket]:
         lines = [json.dumps({"type": "citations", "data": [{"n": 1}]})]
         lines += [json.dumps({"type": "delta", "text": d}) for d in deltas]
-        lines.append(json.dumps({"type": "done"}))
+        lines.append(json.dumps(done or {"type": "done"}))
 
         socket = FakeSocket()
 
@@ -396,6 +396,11 @@ class SpokenTurnOrderingTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "done")
         self.assertTrue(socket.closed)
         self.assertNotIn("error", {e["type"] for e in events})
+
+    def test_done_carries_the_answer_id_for_a_rating(self) -> None:
+        answer_id = "0f5c5d0e-8a52-4f0b-9d55-4a3b1c3e8f21"
+        events, _socket = self.run_turn(["Ja."], done={"type": "done", "answer_id": answer_id})
+        self.assertEqual(events[-1], {"type": "done", "answer_id": answer_id})
 
     def test_audio_carries_the_sample_rate_the_client_needs(self) -> None:
         events, _socket = self.run_turn(["Ett svar som är långt nog att skickas."])

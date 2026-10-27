@@ -7,7 +7,8 @@
 //
 // The sidebar lists the markets like folders. Picking one is the hash route
 // (#all, #global, #group/<id>, #country/SE, #country/SE/sees), so Back walks
-// through them; dropping documents on one makes them for it.
+// through them; dropping documents on one makes them for it. Below them,
+// #insights shows what people ask and what the documents do not answer.
 
 const PAGE_SIZE = 25;
 const TICK_MS = 3000;
@@ -41,6 +42,12 @@ const state = {
   nextQid: 1,
   tickHandle: null,
   trayOpen: true,
+  // #insights: its filters, the last answer from /api/insights, and which
+  // questions are expanded (by wording).
+  insights: { days: 30, market: "", show: "attention", data: null, error: null, open: new Set() },
+  // Questions needing attention in the last 30 days, for the sidebar; null
+  // until known, or when there is no question log.
+  attentionCount: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -52,6 +59,7 @@ const els = {
   railTop: $("rail-top"),
   railGroups: $("rail-groups"),
   railCountries: $("rail-countries"),
+  railInsights: $("rail-insights"),
   newGroupBtn: $("new-group-btn"),
   addCountryBtn: $("add-country-btn"),
   libMain: $("lib-main"),
@@ -64,6 +72,9 @@ const els = {
   viewSub: $("view-sub"),
   searchIcon: $("search-icon"),
   search: $("doc-search"),
+  toolbar: $("toolbar"),
+  tableCard: $("table-card"),
+  insights: $("insights"),
   uploadBtn: $("upload-btn"),
   uploadIcon: $("upload-icon"),
   uploadOptionsBtn: $("upload-options-btn"),
@@ -300,6 +311,8 @@ const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
   trash: '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
+  questions: '<path d="M20.5 12a8.5 8.5 0 0 1-12.4 7.5L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12Z"/><path d="M9.7 9.6a2.4 2.4 0 1 1 3.3 2.2c-.6.3-1 .8-1 1.4v.4"/><circle cx="12" cy="16.4" r=".5" fill="currentColor"/>',
+  thumbDown: '<path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/>',
 };
 
 function icon(name, cls = "icon") {
@@ -354,6 +367,7 @@ function flagNode(code) {
 // The mark beside a market's name: its flag, or an icon.
 function viewMark(view) {
   if (view.kind === "country") return flagNode(view.key);
+  if (view.kind === "insights") return icon("questions");
   return icon(view.kind === "global" ? "globe" : view.kind === "group" ? "group" : "all");
 }
 
@@ -793,6 +807,7 @@ function parseHash(hash) {
     return { kind: "all" };
   }
   if (parts[0] === "global") return { kind: "global" };
+  if (parts[0] === "insights") return { kind: "insights" };
   if (parts[0] === "group" && GROUP_KEY.test(parts[1] || "")) return { kind: "group", key: parts[1].toLowerCase() };
   if (parts[0] === "country") {
     const code = (parts[1] || "").toUpperCase();
@@ -804,6 +819,7 @@ function parseHash(hash) {
 
 function viewHash(view) {
   if (view.kind === "global") return "#global";
+  if (view.kind === "insights") return "#insights";
   if (view.kind === "group") return `#group/${view.key}`;
   if (view.kind === "country") return `#country/${view.key}${view.scope === "sees" ? "/sees" : ""}`;
   return "#all";
@@ -825,6 +841,7 @@ function findGroup(id) {
 
 function viewName(view) {
   if (view.kind === "global") return t("dashboard.global");
+  if (view.kind === "insights") return t("dashboard.insights");
   if (view.kind === "country") return countryName(view.key);
   if (view.kind === "group") return findGroup(view.key)?.name || "";
   return t("dashboard.allDocuments");
@@ -874,6 +891,11 @@ function applyRoute() {
   closeRail();
   renderRail();
   renderViewHead();
+  showInsightsPane(view.kind === "insights");
+  if (view.kind === "insights") {
+    if (changed || !state.insights.data) loadInsights();
+    return;
+  }
   if (changed || !state.docsLoaded) {
     state.offset = 0;
     state.selected.clear();
@@ -940,6 +962,7 @@ function renderRail() {
           )
         : [el("li", { class: "rail-empty", text: t("dashboard.noCountries") })]),
     );
+    els.railInsights.replaceChildren(insightsRailItem());
   });
   els.newGroupBtn.disabled = !countries.length;
   els.newGroupBtn.title = countries.length ? t("dashboard.newGroup") : t("dashboard.addCountriesFirst");
@@ -976,12 +999,14 @@ function renderViewHead() {
     els.viewName.textContent = name;
     els.viewCode.textContent = view.kind === "country" ? view.key : "";
     els.viewCode.hidden = view.kind !== "country";
-    // A country's counts are in its scope switch.
-    els.viewCount.textContent = view.kind === "country" ? "" : t("dashboard.documents", { n: viewCount(view) });
+    // A country's counts are in its scope switch; Insights has its own.
+    els.viewCount.textContent =
+      view.kind === "country" || view.kind === "insights" ? "" : t("dashboard.documents", { n: viewCount(view) });
     const sub = viewSub(view);
     els.viewSub.replaceChildren(...sub);
     els.viewSub.hidden = !sub.length;
     els.viewActions.replaceChildren(...viewActions(view));
+    els.viewActions.classList.toggle("is-wrap", view.kind === "insights");
   });
   els.railOpen.replaceChildren(icon("menu"), el("span", { text: name }));
   els.railOpen.title = t("dashboard.openLibrary");
@@ -994,6 +1019,7 @@ function chipLink(href, mark, label, cls = "chip") {
 function viewSub(view) {
   if (view.kind === "all") return [el("span", { class: "muted", text: t("dashboard.allSub") })];
   if (view.kind === "global") return [el("span", { class: "muted", text: t("dashboard.globalText") })];
+  if (view.kind === "insights") return [el("span", { class: "muted", text: t("dashboard.insightsSub") })];
   if (view.kind === "country") {
     const c = state.markets.countries.find((x) => x.code === view.key);
     const groups = (c?.groups || []).map((groupName) => state.markets.groups.find((g) => g.name === groupName));
@@ -1016,6 +1042,7 @@ function viewSub(view) {
 }
 
 function viewActions(view) {
+  if (view.kind === "insights") return insightsActions();
   if (view.kind === "all") {
     return [
       moreMenu(t("dashboard.moreActions", { name: t("dashboard.allDocuments") }), [
@@ -1894,6 +1921,8 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (anyModalOpen() || e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
+  // The shortcuts are the document list's; Insights has none of its own.
+  if (state.view.kind === "insights") return;
   if (e.key === "/") {
     e.preventDefault();
     els.search.focus();
@@ -2255,24 +2284,27 @@ function isFileDrag(e) {
   return Array.from(e.dataTransfer?.types || []).includes("Files");
 }
 
+// Insights has no table to drop on, so it takes no files.
+const takesFiles = (e) => isFileDrag(e) && state.view.kind !== "insights";
+
 els.libMain.addEventListener("dragenter", (e) => {
-  if (!isFileDrag(e)) return;
+  if (!takesFiles(e)) return;
   e.preventDefault();
   fileDragDepth++;
   els.dropzone.hidden = false;
 });
 els.libMain.addEventListener("dragover", (e) => {
-  if (!isFileDrag(e)) return;
+  if (!takesFiles(e)) return;
   e.preventDefault();
   e.dataTransfer.dropEffect = "copy";
 });
 els.libMain.addEventListener("dragleave", (e) => {
-  if (!isFileDrag(e)) return;
+  if (!takesFiles(e)) return;
   fileDragDepth = Math.max(0, fileDragDepth - 1);
   if (!fileDragDepth) els.dropzone.hidden = true;
 });
 els.libMain.addEventListener("drop", (e) => {
-  if (!isFileDrag(e)) return;
+  if (!takesFiles(e)) return;
   e.preventDefault();
   fileDragDepth = 0;
   els.dropzone.hidden = true;
@@ -2283,7 +2315,7 @@ els.libMain.addEventListener("drop", (e) => {
 window.addEventListener("dragover", (e) => {
   if (!isFileDrag(e)) return;
   e.preventDefault();
-  if (!els.libMain.contains(e.target)) e.dataTransfer.dropEffect = "none";
+  if (!takesFiles(e) || !els.libMain.contains(e.target)) e.dataTransfer.dropEffect = "none";
 });
 window.addEventListener("drop", (e) => {
   if (isFileDrag(e)) e.preventDefault();
@@ -2406,6 +2438,443 @@ els.queueClearBtn.addEventListener("click", () => {
   renderQueue();
 });
 
+// --- Insights: what people ask -----------------------------------------------------
+// The question log (services/query/app/answer_log.py) read back: how many
+// questions were asked, how many the documents answered and, grouped by their
+// wording, the ones they did not - or that someone gave a thumbs down. It never
+// says who asked.
+
+const INSIGHT_DAYS = [7, 30, 90];
+// Every grouped question in one call (the query service's maximum), so both
+// "Needs attention" and "All questions" are counted without asking twice.
+const INSIGHT_LIMIT = 500;
+// Worst first, the order a mixed question lists them in.
+const COVERAGE = {
+  no_hits: { key: "dashboard.covNoHits", cls: "is-bad" },
+  not_covered: { key: "dashboard.covNotCovered", cls: "is-bad" },
+  partial: { key: "dashboard.covPartial", cls: "is-warn" },
+  answered: { key: "dashboard.covAnswered", cls: "is-ok" },
+  pending: { key: "dashboard.covPending", cls: "" },
+};
+
+function showInsightsPane(on) {
+  els.toolbar.hidden = on;
+  els.tableCard.hidden = on;
+  els.insights.hidden = !on;
+  if (!on) return;
+  // The drawer and the selection belong to the document list.
+  if (state.detail) closeDetail();
+  if (state.selected.size) clearSelection();
+}
+
+function insightsRailItem() {
+  const n = state.attentionCount;
+  const li = railItem({ kind: "insights" }, icon("questions"), t("dashboard.insights"), n || 0);
+  const count = li.querySelector(".rail-count");
+  if (n === null) {
+    count.remove();
+  } else if (n > 0) {
+    count.classList.add("is-alert");
+    count.title = t("dashboard.attentionCount", { n });
+  }
+  return li;
+}
+
+function setAttentionCount(n) {
+  if (n === state.attentionCount) return;
+  state.attentionCount = n;
+  keepFocus(() => els.railInsights.replaceChildren(insightsRailItem()));
+}
+
+async function loadAttentionCount() {
+  try {
+    const data = await api(`/api/insights?days=30&kind=attention&limit=${INSIGHT_LIMIT}`);
+    setAttentionCount(data?.enabled && data?.ready ? data.groups.length : null);
+  } catch {
+    /* the sidebar simply shows no count */
+  }
+}
+
+let insightsSeq = 0;
+
+async function loadInsights() {
+  const seq = ++insightsSeq;
+  const { days, market } = state.insights;
+  els.insights.classList.add("is-loading");
+  if (!state.insights.data) renderInsights();
+  let data;
+  try {
+    const params = new URLSearchParams({ days, market, kind: "all", limit: INSIGHT_LIMIT });
+    data = await api(`/api/insights?${params}`);
+  } catch (err) {
+    if (seq !== insightsSeq) return;
+    els.insights.classList.remove("is-loading");
+    state.insights.error = err.message;
+    // Never leave one period's figures under another period's buttons.
+    state.insights.data = null;
+    renderInsights();
+    return;
+  }
+  // A slower, older request must not paint over a newer one.
+  if (seq !== insightsSeq) return;
+  els.insights.classList.remove("is-loading");
+  state.insights.error = null;
+  state.insights.data = data;
+  if (days === 30 && !market) {
+    setAttentionCount(data?.enabled && data?.ready ? data.groups.filter((g) => g.needs_attention).length : null);
+  }
+  renderInsights();
+}
+
+function setInsightFilter(change) {
+  Object.assign(state.insights, change);
+  state.insights.open.clear();
+  renderViewHead();
+  loadInsights();
+}
+
+function shownGroups() {
+  const groups = state.insights.data?.groups || [];
+  return state.insights.show === "attention" ? groups.filter((g) => g.needs_attention) : groups;
+}
+
+function insightsActions() {
+  const ins = state.insights;
+  const period = el(
+    "div",
+    { class: "seg", role: "group", "aria-label": t("dashboard.insightsPeriod") },
+    ...INSIGHT_DAYS.map((n) =>
+      el(
+        "button",
+        {
+          type: "button",
+          class: "seg-btn",
+          "aria-pressed": String(ins.days === n),
+          "data-focus-key": `days:${n}`,
+          onclick: () => ins.days !== n && setInsightFilter({ days: n }),
+        },
+        el("span", { text: t("dashboard.lastDays", { n }) }),
+      ),
+    ),
+  );
+  // "" is every question; "none" the ones asked with All markets picked in the chat.
+  const market = el(
+    "select",
+    {
+      class: "ins-market",
+      "aria-label": t("dashboard.insightsMarket"),
+      "data-focus-key": "ins-market",
+      onchange: (e) => setInsightFilter({ market: e.target.value }),
+    },
+    el("option", { value: "", text: t("dashboard.anyMarket") }),
+    el("option", { value: "none", text: t("dashboard.noMarketChosen") }),
+    ...sortedCountries().map((c) => el("option", { value: c.code, text: countryName(c.code) })),
+  );
+  market.value = ins.market;
+  const exportBtn = el(
+    "button",
+    {
+      type: "button",
+      class: "btn-secondary btn-with-icon",
+      "data-focus-key": "ins-export",
+      disabled: !shownGroups().length,
+      onclick: exportInsights,
+    },
+    icon("download"),
+    el("span", { text: t("dashboard.exportCsv") }),
+  );
+  return [period, market, exportBtn];
+}
+
+function renderInsights() {
+  const { data, error } = state.insights;
+  const exportBtn = els.viewActions.querySelector('[data-focus-key="ins-export"]');
+  if (exportBtn) exportBtn.disabled = !shownGroups().length;
+  let content;
+  if (!data) {
+    content = error
+      ? [insightsEmpty(t("dashboard.loadInsightsFailed", { message: error }), "")]
+      : [insightsSkeleton()];
+  } else if (!data.enabled) {
+    content = [insightsEmpty(t("dashboard.insightsOffTitle"), t("dashboard.insightsOffBody"))];
+  } else if (!data.ready) {
+    content = [insightsEmpty(t("dashboard.insightsNotReadyTitle"), t("dashboard.insightsNotReadyBody"))];
+  } else {
+    content = [summaryCards(data), questionsCard(data), insightsFoot(data)];
+  }
+  keepFocus(() => els.insights.replaceChildren(...content));
+}
+
+function insightsEmpty(title, body) {
+  return el(
+    "div",
+    { class: "empty ins-empty" },
+    el("div", { class: "empty-icon" }, icon("questions")),
+    el("strong", { text: title }),
+    body ? el("span", { class: "muted", text: body }) : null,
+  );
+}
+
+function insightsSkeleton() {
+  return el(
+    "div",
+    { class: "ins-cards", "aria-hidden": "true" },
+    ...[58, 44, 52, 40].map((w) =>
+      el(
+        "div",
+        { class: "ins-card" },
+        el("span", { class: "sk", style: `width:${w}%` }),
+        el("span", { class: "sk sk-figure", style: "width:34%" }),
+        el("span", { class: "sk", style: `width:${w + 14}%` }),
+      ),
+    ),
+  );
+}
+
+function formatNumber(n) {
+  return new Intl.NumberFormat(Lang.current).format(n || 0);
+}
+
+function summaryCards(data) {
+  const s = data.summary;
+  // Answers still being checked count towards neither side.
+  const checked = s.total - s.pending;
+  const notCovered = s.not_covered + s.no_hits;
+  const answered = checked
+    ? new Intl.NumberFormat(Lang.current, { style: "percent", maximumFractionDigits: 0 }).format(s.answered / checked)
+    : "–";
+  const card = (label, value, sub, cls = "") =>
+    el(
+      "div",
+      { class: `ins-card ${cls}`.trim() },
+      el("span", { class: "ins-card-label", text: label }),
+      el("strong", { class: "ins-card-value", text: value }),
+      el("span", { class: "ins-card-sub", text: sub }),
+    );
+  return el(
+    "div",
+    { class: "ins-cards" },
+    card(t("dashboard.cardAsked"), formatNumber(s.total), t("dashboard.cardAskedSub", { n: data.days })),
+    card(t("dashboard.cardAnswered"), answered, t("dashboard.cardAnsweredSub", { n: s.partial })),
+    card(
+      t("dashboard.cardNotCovered"),
+      formatNumber(notCovered),
+      t("dashboard.cardNotCoveredSub", { n: s.no_hits }),
+      notCovered ? "is-bad" : "",
+    ),
+    card(t("dashboard.cardDown"), formatNumber(s.down), t("dashboard.cardDownSub", { n: s.up }), s.down ? "is-warn" : ""),
+  );
+}
+
+function questionsCard(data) {
+  const all = data.groups;
+  const attention = all.filter((g) => g.needs_attention);
+  const groups = state.insights.show === "attention" ? attention : all;
+  const showButton = (show, label, n) =>
+    el(
+      "button",
+      {
+        type: "button",
+        class: "seg-btn",
+        "aria-pressed": String(state.insights.show === show),
+        "data-focus-key": `show:${show}`,
+        onclick: () => {
+          state.insights.show = show;
+          renderInsights();
+        },
+      },
+      el("span", { text: label }),
+      el("span", { class: "seg-count", text: String(n) }),
+    );
+  let body;
+  if (groups.length) {
+    body = el("ul", { class: "ins-list" }, ...groups.map(questionRow));
+  } else if (!data.summary.total) {
+    body = insightsEmpty(t("dashboard.insightsNoneTitle", { n: data.days }), t("dashboard.insightsNoneBody"));
+  } else {
+    body = insightsEmpty(t("dashboard.insightsCalmTitle"), t("dashboard.insightsCalmBody"));
+  }
+  return el(
+    "div",
+    { class: "table-card ins-questions" },
+    el(
+      "div",
+      { class: "ins-list-head" },
+      el(
+        "div",
+        { class: "seg", role: "group", "aria-label": t("dashboard.showLabel") },
+        showButton("attention", t("dashboard.needsAttention"), attention.length),
+        showButton("all", t("dashboard.allQuestions"), all.length),
+      ),
+    ),
+    body,
+  );
+}
+
+function coverageBadge(coverage) {
+  const c = COVERAGE[coverage] || COVERAGE.pending;
+  return el("span", { class: `cov ${c.cls}`.trim(), text: t(c.key) });
+}
+
+// "3 hours ago" for this week, a date before that.
+function timeAgo(iso) {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const seconds = Math.round((then - Date.now()) / 1000);
+  if (Math.abs(seconds) > 7 * 86400) return formatDate(iso);
+  try {
+    const rtf = new Intl.RelativeTimeFormat(Lang.current, { numeric: "auto" });
+    for (const [unit, size] of [["day", 86400], ["hour", 3600], ["minute", 60]]) {
+      if (Math.abs(seconds) >= size) return rtf.format(Math.round(seconds / size), unit);
+    }
+    return rtf.format(0, "minute");
+  } catch {
+    return formatDate(iso);
+  }
+}
+
+function timeNode(iso) {
+  const d = new Date(iso);
+  return el("time", {
+    datetime: iso,
+    title: Number.isNaN(d.getTime()) ? null : d.toLocaleString(Lang.current),
+    text: timeAgo(iso),
+  });
+}
+
+// Which markets it was asked for: "" is a question asked for all of them.
+function marketNames(codes) {
+  const names = codes.map((c) => (c ? countryName(c) : t("dashboard.askedAllMarkets")));
+  const shown = names.slice(0, 3).join(", ") + (names.length > 3 ? ` +${names.length - 3}` : "");
+  return el("span", { title: names.join(", "), text: shown });
+}
+
+function questionRow(g) {
+  const key = g.question;
+  const open = state.insights.open.has(key);
+  const li = el("li", { class: `ins-item${open ? " is-open" : ""}` });
+  const button = el(
+    "button",
+    {
+      type: "button",
+      class: "ins-row",
+      "aria-expanded": String(open),
+      "data-focus-key": `q:${key}`,
+      onclick: () => {
+        const nowOpen = !state.insights.open.has(key);
+        if (nowOpen) state.insights.open.add(key);
+        else state.insights.open.delete(key);
+        li.classList.toggle("is-open", nowOpen);
+        button.setAttribute("aria-expanded", String(nowOpen));
+        if (nowOpen) li.append(questionDetail(g));
+        else li.querySelector(".ins-detail")?.remove();
+      },
+    },
+    coverageBadge(g.worst || "pending"),
+    el(
+      "span",
+      { class: "ins-q" },
+      el("span", { class: "ins-q-text", text: g.question }),
+      el(
+        "span",
+        { class: "ins-q-meta" },
+        el("span", { text: t("dashboard.askedTimes", { n: g.count }) }),
+        marketNames(g.markets),
+        timeNode(g.last_asked),
+      ),
+    ),
+    g.down
+      ? el(
+          "span",
+          { class: "ins-down", title: t("dashboard.thumbsDownCount", { n: g.down }) },
+          icon("thumbDown"),
+          el("span", { text: String(g.down) }),
+        )
+      : null,
+    icon("chevron", "icon ins-chevron"),
+  );
+  li.append(button);
+  if (open) li.append(questionDetail(g));
+  return li;
+}
+
+function questionDetail(g) {
+  const section = (label, body) => el("div", { class: "ins-section" }, el("h3", { text: label }), body);
+  const order = Object.keys(COVERAGE);
+  const mix = Object.entries(g.coverage).sort(([a], [b]) => order.indexOf(a) - order.indexOf(b));
+  return el(
+    "div",
+    { class: "ins-detail" },
+    // Asked several times and judged differently: how often each way.
+    mix.length > 1
+      ? el(
+          "div",
+          { class: "ins-mix" },
+          ...mix.map(([c, n]) => el("span", { class: `ins-pill ${COVERAGE[c]?.cls || ""}`.trim(), text: `${t(COVERAGE[c]?.key || COVERAGE.pending.key)} × ${n}` })),
+        )
+      : null,
+    section(t("dashboard.latestAnswer"), el("p", { class: "ins-answer", text: String(g.answer || "").replace(/\s*\[\d+\]/g, "") })),
+    section(
+      t("dashboard.sourcesUsed"),
+      g.sources.length
+        ? el("div", { class: "chips" }, ...g.sources.map((name) => el("span", { class: "chip" }, icon("file"), el("span", { text: name }))))
+        : el("span", { class: "muted", text: t("dashboard.noSourcesUsed") }),
+    ),
+    g.comments.length
+      ? section(
+          t("dashboard.whatPeopleSaid"),
+          el("ul", { class: "ins-comments" }, ...g.comments.map((c) => el("li", {}, el("q", { text: c.text }), timeNode(c.at)))),
+        )
+      : null,
+  );
+}
+
+function insightsFoot(data) {
+  const parts = [t("dashboard.insightsPrivacy", { n: data.retention_days })];
+  if (data.truncated) parts.push(t("dashboard.insightsTruncated", { n: formatNumber(data.summary.total) }));
+  return el("p", { class: "ins-foot", text: parts.join(" ") });
+}
+
+// A cell a spreadsheet would run as a formula is kept as text.
+function csvCell(value) {
+  let s = String(value ?? "");
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+// What is on screen, built in the browser: nothing is asked of the server again.
+function exportInsights() {
+  const groups = shownGroups();
+  if (!groups.length) return;
+  const head = [
+    "question", "times_asked", "coverage", "unanswered", "thumbs_up", "thumbs_down",
+    "markets", "last_asked", "documents", "comments", "latest_answer",
+  ];
+  const rows = groups.map((g) => [
+    g.question,
+    g.count,
+    g.worst || "pending",
+    g.unanswered,
+    g.up,
+    g.down,
+    g.markets.map((m) => m || "all").join(" "),
+    g.last_asked,
+    g.sources.join("; "),
+    g.comments.map((c) => c.text).join(" | "),
+    g.answer,
+  ]);
+  // The byte-order mark makes Excel read the file as UTF-8 (å, ä, ö).
+  const csv = "\ufeff" + [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n";
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const { days, market, show } = state.insights;
+  const name = `questions-${show}-${days}d-${market || "all"}-${new Date().toISOString().slice(0, 10)}.csv`;
+  const link = el("a", { href: url, download: name, hidden: true });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // --- Background refresh ----------------------------------------------------------
 // Only while something is still being indexed, and only while the tab is
 // visible - an idle dashboard sends nothing.
@@ -2449,7 +2918,8 @@ async function tick() {
 
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
-    loadDocs();
+    if (state.view.kind === "insights") loadInsights();
+    else loadDocs();
     loadMarkets();
   } else {
     clearTimeout(state.tickHandle);
@@ -2464,6 +2934,7 @@ document.addEventListener("langchange", () => {
   renderRail();
   renderViewHead();
   renderDocs();
+  if (state.view.kind === "insights") renderInsights();
   renderQueue();
   setTrayOpen(state.trayOpen);
   detailEditor.render();
@@ -2493,3 +2964,4 @@ paintIcons();
 loadSort();
 renderSortHeaders();
 loadMarkets().finally(applyRoute);
+loadAttentionCount();

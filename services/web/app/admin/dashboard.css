@@ -1912,3 +1912,344 @@ dialog h2 {
     display: none;
   }
 }
+
+/* --- Insights: what people ask ------------------------------------------------------ */
+
+.rail-count.is-alert {
+  background: var(--err-soft);
+  color: var(--err);
+  font-weight: 600;
+  opacity: 1;
+}
+
+.view-actions.is-wrap {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.view-actions .ins-market {
+  width: auto;
+  max-width: 220px;
+  padding: 6px 30px 6px 10px;
+  font-size: 13px;
+  background-position: right 10px center;
+  background-size: 11px 11px;
+}
+
+.insights {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* New figures on their way: the old ones stay, dimmed, rather than flashing away. */
+.insights.is-loading .ins-cards,
+.insights.is-loading .ins-questions {
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+
+.ins-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ins-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.ins-card-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ins-card-value {
+  font-size: 26px;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.ins-card-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ins-card.is-bad .ins-card-value { color: var(--err); }
+.ins-card.is-warn .ins-card-value { color: var(--warn); }
+
+.ins-card .sk {
+  height: 10px;
+}
+
+.ins-card .sk-figure {
+  height: 24px;
+  margin: 2px 0;
+}
+
+.ins-list-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.ins-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ins-item + .ins-item {
+  border-top: 1px solid var(--panel-border);
+}
+
+.ins-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: transparent;
+  color: var(--text);
+  border-radius: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ins-item:last-child .ins-row:not([aria-expanded="true"]) {
+  border-radius: 0 0 14px 14px;
+}
+
+.ins-row:hover {
+  background: var(--hover-bg);
+}
+
+.ins-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Coverage: a dot and a word, the width of the longest so questions line up. */
+.cov {
+  flex-shrink: 0;
+  width: 124px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cov::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.cov.is-bad,
+.ins-pill.is-bad { color: var(--err); }
+.cov.is-warn,
+.ins-pill.is-warn { color: var(--warn); }
+.cov.is-ok,
+.ins-pill.is-ok { color: var(--ok); }
+
+.ins-q {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ins-q-text {
+  font-size: 14px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.ins-q-meta {
+  display: flex;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ins-q-meta > * + *::before {
+  content: "·";
+  margin: 0 6px;
+}
+
+.ins-down {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ins-down .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.ins-chevron {
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.ins-item.is-open .ins-chevron {
+  transform: rotate(180deg);
+}
+
+/* Lined up under the question, past the coverage column. */
+.ins-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 14px 16px calc(14px + 124px + 12px);
+}
+
+.ins-section h3 {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ins-answer {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.ins-mix {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ins-pill {
+  padding: 2px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ins-comments {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ins-comments li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.ins-comments q {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ins-comments time {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ins-foot {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .ins-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .view-actions.is-wrap {
+    justify-content: stretch;
+  }
+
+  /* The period on a row of its own, so "30 days" is never cut to "3...". */
+  .view-actions.is-wrap > .seg {
+    flex-basis: 100%;
+  }
+
+  .view-actions .ins-market {
+    flex: 1;
+    max-width: none;
+  }
+
+  .ins-card {
+    padding: 12px;
+  }
+
+  .ins-card-value {
+    font-size: 22px;
+  }
+
+  /* Coverage and the thumbs on one line, the question under them. */
+  .ins-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "cov down chevron"
+      "q q q";
+    gap: 6px 10px;
+  }
+
+  .ins-row .cov { grid-area: cov; width: auto; }
+  .ins-row .ins-down { grid-area: down; }
+  .ins-row .ins-chevron { grid-area: chevron; }
+  .ins-row .ins-q { grid-area: q; }
+
+  .ins-detail {
+    padding-left: 14px;
+  }
+
+  .ins-list-head .seg {
+    flex: 1;
+  }
+}
