@@ -60,7 +60,8 @@ ENTRA_LOGIN_URL = "/.auth/login/aad"
 ENTRA_LOGOUT_URL = "/.auth/logout"
 
 # /healthz is the Container Apps probe and must answer before login. The login
-# page needs its own stylesheet, and browsers ask for the favicon unprompted.
+# page needs its own stylesheet, and browsers ask for the icons unprompted -
+# iPhones for apple-touch-icon.png when the page is added to the home screen.
 # /api/me is public so the UI can always find out where to send someone to sign
 # in; it names no user unless the request is already authenticated.
 PUBLIC_PATHS = frozenset(
@@ -71,6 +72,7 @@ PUBLIC_PATHS = frozenset(
         "/api/me",
         "/styles.css",
         "/favicon.ico",
+        "/apple-touch-icon.png",
         # The sign-in page is translated too, so it needs these before sign-in.
         "/lang.js",
         "/strings.js",
