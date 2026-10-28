@@ -503,6 +503,12 @@ body.is-dragging-docs .rail-item[data-drop-hint] {
   animation: pop-in 0.12s ease-out;
 }
 
+/* Set by placePopover() when hanging from the right edge would leave the screen. */
+.popover.from-left {
+  left: 0;
+  right: auto;
+}
+
 .menu-item {
   display: flex;
   align-items: center;
