@@ -163,6 +163,12 @@ REWRITE_MAX_TOKENS = 120
 REWRITE_MAX_CHARS = 400
 
 ANSWER_MAX_TOKENS = 800
+# 0, so the same question gets the same answer. At the provider's default (1.0
+# for OpenAI) an answer the documents covered sometimes opened with "the sources
+# don't say" and then answered anyway - a coin toss per question, not a matter
+# of wording: rewording the prompt against it made answers stretch related rules
+# into a "yes" instead.
+ANSWER_TEMPERATURE = 0.0
 # A spoken answer has to be short, and asking the prompt nicely does not achieve
 # that - a model handed six retrieved chunks and 800 tokens of headroom writes an
 # essay whatever the system prompt says. The ceiling is the enforcement; the
@@ -597,6 +603,7 @@ async def query(req: QueryRequest, request: Request) -> QueryResponse:
             user_msg,
             max_tokens=_max_tokens_for(req),
             history=_history_turns(req),
+            temperature=ANSWER_TEMPERATURE,
         )
     except Exception as exc:
         raise HTTPException(502, f"llm call failed: {exc}") from exc
@@ -667,6 +674,7 @@ async def _run_stream(
             user_msg,
             max_tokens=_max_tokens_for(req),
             history=_history_turns(req),
+            temperature=ANSWER_TEMPERATURE,
         ):
             if chunk:
                 parts.append(chunk)
