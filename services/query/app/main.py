@@ -530,10 +530,12 @@ def _format_sources(
             )
         )
 
+    # Ahead of the sources: after them, an answer on All markets followed source
+    # [1] and gave Sweden's mileage rate alone, with the Group's rate right there.
     guidance = market_guidance(chosen_market) + "\n\n" if limited else ""
     user_msg = (
-        f"Question: {req.question}\n\n"
-        "Sources:\n" + "\n\n".join(blocks) + "\n\n" + guidance +
+        f"Question: {req.question}\n\n" + guidance +
+        "Sources:\n" + "\n\n".join(blocks) + "\n\n"
         "Please answer the question using only these sources, in a warm and conversational "
         "tone. Do not include [#] citation markers in the answer."
     )
