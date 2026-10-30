@@ -113,7 +113,7 @@ def market_guidance(chosen_market: str | None) -> str:
     A source for a specific market beats one for everyone in that market: tagging
     a document for one country only means something if it does."""
     lines = [
-        'Each source above is marked "applies to: everyone" or with the markets '
+        'Each source below is marked "applies to: everyone" or with the markets '
         "(countries) it is limited to.",
         "- A source limited to certain markets applies only there. Never present its rule "
         "as the rule for everyone - not even when it is the only source that answers.",
