@@ -745,9 +745,19 @@ function togglePopover(button, panel) {
   closePopover();
   if (!opening) return;
   panel.hidden = false;
+  placePopover(panel);
   button.setAttribute("aria-expanded", "true");
   openPop = { button, panel };
   panel.querySelector("button, input, a[href]")?.focus();
+}
+
+// A popover hangs from its button's right edge, which suits the buttons at the
+// right of a row. The narrow layouts move them to the left - the view's actions
+// drop under its title - and there that edge would put most of the popover
+// off-screen, so it hangs from the button's left edge instead.
+function placePopover(panel) {
+  panel.classList.remove("from-left");
+  if (panel.getBoundingClientRect().left < 8) panel.classList.add("from-left");
 }
 
 function closePopover(restoreFocus = false) {

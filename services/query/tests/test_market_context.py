@@ -69,7 +69,7 @@ class FormatSourcesTests(unittest.TestCase):
         self.assertIn("[1] (remote-se.pdf, p.1 — 3. Remote days) — applies to: Sweden\n", user_msg)
         self.assertIn("[2] (handbook.pdf, p.2 — 3. Remote days) — applies to: everyone\n", user_msg)
         self.assertIn("has not chosen a market", user_msg)
-        self.assertLess(user_msg.index("has not chosen"), user_msg.index("Please answer"))
+        self.assertLess(user_msg.index("has not chosen"), user_msg.index("Sources:"))
         self.assertEqual(citations[0].audience.model_dump(), {"countries": ["SE"], "groups": []})
         self.assertIsNone(citations[1].audience)
 

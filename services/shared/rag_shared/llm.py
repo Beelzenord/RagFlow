@@ -103,17 +103,19 @@ class LLMClient:
         user: str,
         max_tokens: int = 1024,
         history: Sequence[Turn] | None = None,
+        temperature: float | None = None,
     ) -> AsyncIterator[str]:
         """Yield text deltas as they arrive from the upstream provider.
 
         Each yielded string is a partial chunk of the assistant message; concat
-        all chunks to reconstruct the full answer.
+        all chunks to reconstruct the full answer. `temperature` None leaves the
+        provider's default.
         """
         if self._provider == "anthropic":
-            async for delta in self._stream_anthropic(system, user, max_tokens, history):
+            async for delta in self._stream_anthropic(system, user, max_tokens, history, temperature):
                 yield delta
             return
-        async for delta in self._stream_openai(system, user, max_tokens, history):
+        async for delta in self._stream_openai(system, user, max_tokens, history, temperature):
             yield delta
 
     async def _stream_openai(
@@ -122,13 +124,16 @@ class LLMClient:
         user: str,
         max_tokens: int,
         history: Sequence[Turn] | None = None,
+        temperature: float | None = None,
     ) -> AsyncIterator[str]:
-        payload = {
+        payload: dict[str, Any] = {
             "model": self._model,
             "max_tokens": max_tokens,
             "stream": True,
             "messages": self._messages(system, user, history),
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
         async with self._client.stream("POST", "/chat/completions", json=payload) as resp:
             await _raise_for_stream_status(resp)
             async for line in resp.aiter_lines():
@@ -154,14 +159,17 @@ class LLMClient:
         user: str,
         max_tokens: int,
         history: Sequence[Turn] | None = None,
+        temperature: float | None = None,
     ) -> AsyncIterator[str]:
-        payload = {
+        payload: dict[str, Any] = {
             "model": self._model,
             "max_tokens": max_tokens,
             "stream": True,
             "system": system,
             "messages": self._messages(system, user, history),
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
         async with self._client.stream("POST", "/v1/messages", json=payload) as resp:
             await _raise_for_stream_status(resp)
             async for line in resp.aiter_lines():
