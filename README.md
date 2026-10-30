@@ -309,9 +309,16 @@ One library rather than tabs:
 - **The drawer.** A document opens beside the table with its preview, who it is
   for, Download and Delete. With it open, the arrow keys page through
   documents.
+- **Rename** with the pencil beside the drawer's title, by double-clicking the
+  title, or with `r`/`F2`; the extension stays, and Undo puts the old name
+  back. The new name shows at once in the table, the chat's citations,
+  downloads and Insights. Passages are embedded with their document's name, so
+  that one document is re-embedded in the background from the text already
+  extracted: no LlamaParse call, and it goes on answering meanwhile. Over the
+  API: `PATCH /documents/{id}` on ingestion, with `{"filename": ...}`.
 - **Upload** with the button, or by dropping PDF and JPEG files on the table.
-- **Keyboard:** `/` search, arrow keys move, `Enter` opens, `x` selects, `Esc`
-  closes, `?` lists these.
+- **Keyboard:** `/` search, arrow keys move, `Enter` opens, `x` selects, `r`
+  renames, `Esc` closes, `?` lists these.
 - **Insights** sits under *Questions*, below the markets: what people ask and
   what the documents do not answer (see *The question log*). Its count is the
   questions needing attention in the last 30 days.

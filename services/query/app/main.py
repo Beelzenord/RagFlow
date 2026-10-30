@@ -28,12 +28,15 @@ from .answer_log import (
     COVERAGE_SQL,
     COVERAGE_SYSTEM,
     COVERAGE_TIMEOUT_S,
+    CURRENT_NAMES_SQL,
     FEEDBACK_SQL,
     INSERT_SQL,
     INSIGHTS_ROW_CAP,
     INSIGHTS_SQL,
     PURGE_SQL,
+    cited_document_ids,
     coverage_prompt,
+    current_sources,
     group_questions,
     parse_coverage,
     sources_of,
@@ -847,17 +850,21 @@ async def insights(
     try:
         async with session_scope() as session:
             found = (await session.execute(text(INSIGHTS_SQL.format(market=clause)), params)).mappings().all()
+            rows = []
+            for r in found:
+                row = dict(r)
+                if isinstance(row.get("sources"), str):
+                    row["sources"] = json.loads(row["sources"])
+                rows.append(row)
+            ids = cited_document_ids(rows)
+            if ids:
+                names = (await session.execute(text(CURRENT_NAMES_SQL), {"ids": ids})).all()
+                rows = current_sources(rows, {doc_id: name for doc_id, name in names})
     except ProgrammingError as exc:
         if not _undefined_table(exc):
             raise
         return {"enabled": settings.answer_log_enabled, "ready": False, "days": days, "market": market,
                 "summary": summarize([]), "groups": [], "truncated": False}
-    rows = []
-    for r in found:
-        row = dict(r)
-        if isinstance(row.get("sources"), str):
-            row["sources"] = json.loads(row["sources"])
-        rows.append(row)
     return {
         "enabled": settings.answer_log_enabled,
         "ready": True,

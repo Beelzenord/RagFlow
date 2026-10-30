@@ -43,6 +43,7 @@ ADMIN_ROUTES = [
     ("PUT", f"/api/documents/{DOC}/audience", {"everyone": True}),
     ("PUT", "/api/documents/audience", {"document_ids": [DOC], "everyone": True}),
     ("POST", "/api/documents/rechunk-all", None),
+    ("PATCH", f"/api/documents/{DOC}", {"filename": "Sick leave policy"}),
 ]
 
 
@@ -128,6 +129,24 @@ class MarketsProxyTests(_Harness):
             self.calls[0]["json"],
             {"document_ids": [DOC], "everyone": False, "countries": ["SE"], "groups": []},
         )
+
+    def test_a_rename_carries_only_the_name(self) -> None:
+        client = self.client("admin")
+        client.patch(f"/api/documents/{DOC}", json={"filename": "Sick leave policy", "status": "completed"})
+        self.assertEqual(self.calls[0]["json"], {"filename": "Sick leave policy"})
+
+    def test_a_malformed_rename_never_reaches_ingestion(self) -> None:
+        client = self.client("admin")
+        cases = [
+            (f"/api/documents/{DOC}", {"filename": ""}),
+            (f"/api/documents/{DOC}", {"filename": "x" * 256}),
+            (f"/api/documents/{DOC}", {}),
+            ("/api/documents/not-an-id", {"filename": "Policy"}),
+        ]
+        for path, body in cases:
+            with self.subTest(path=path, body=str(body)[:30]):
+                self.assertEqual(client.patch(path, json=body).status_code, 422)
+        self.assertEqual(self.calls, [])
 
     def test_a_refusal_reaches_the_dashboard_intact(self) -> None:
         # The 409 explaining why a country can't be removed is the message shown.

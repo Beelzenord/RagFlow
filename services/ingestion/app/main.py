@@ -36,6 +36,7 @@ from .audience import (
     who_filter,
 )
 from .countries import ISO_COUNTRIES
+from .naming import clean_filename
 from .pipeline import run_ingestion, run_rechunk
 from .storage import resolve_storage_file, save_original
 
@@ -147,6 +148,52 @@ async def get_document(document_id: UUID) -> dict[str, Any]:
     if not row:
         raise HTTPException(404, "document not found")
     return _document_out(row)
+
+
+class RenameBody(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=255)
+
+
+@app.patch("/documents/{document_id}", dependencies=[Depends(require_service_key)])
+async def rename_document(document_id: UUID, body: RenameBody, background: BackgroundTasks) -> dict[str, Any]:
+    """Rename a document; its extension stays. The new name shows everywhere at
+    once - citations, downloads and search read it fresh - and the passages,
+    embedded with the name, are re-embedded in the background from the text
+    already extracted. The document answers throughout."""
+    doc_id = str(document_id)
+    async with session_scope() as session:
+        row = (
+            await session.execute(
+                text("SELECT original_filename, status FROM documents WHERE id = :id FOR UPDATE"),
+                {"id": doc_id},
+            )
+        ).mappings().first()
+        if not row:
+            raise HTTPException(404, "document not found")
+        try:
+            name = clean_filename(body.filename, row["original_filename"] or "")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        changed = name != row["original_filename"]
+        if changed:
+            await session.execute(
+                text("UPDATE documents SET original_filename = :n WHERE id = :id"),
+                {"n": name, "id": doc_id},
+            )
+        out = (
+            await session.execute(
+                text(f"SELECT {_DOCUMENT_COLUMNS} FROM documents d WHERE d.id = :id"),
+                {"id": doc_id},
+            )
+        ).mappings().first()
+    # Still processing: the pipeline reads the name when it embeds, and catches
+    # a rename made after that. Failed: nothing indexed to update.
+    reindexing = changed and row["status"] in ("completed", "degraded")
+    if reindexing:
+        background.add_task(run_rechunk, [doc_id])
+    if changed:
+        log.info("renamed document_id=%s reindexing=%s", doc_id, reindexing)
+    return {**_document_out(out), "reindexing": reindexing}
 
 
 # Types a browser renders itself, for the dashboard's preview. Anything else is

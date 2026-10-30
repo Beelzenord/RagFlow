@@ -10,7 +10,9 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from app.answer_log import (
+    cited_document_ids,
     coverage_prompt,
+    current_sources,
     group_questions,
     normalize_question,
     parse_coverage,
@@ -71,6 +73,29 @@ class SourcesTests(unittest.TestCase):
     def test_plain_dicts_work_too(self) -> None:
         self.assertEqual(sources_of([{"document_id": "a", "filename": "A.pdf"}]),
                          [{"document_id": "a", "filename": "A.pdf"}])
+
+
+class CurrentNamesTests(unittest.TestCase):
+    ROWS = [
+        row("Q", sources=[{"document_id": "a", "filename": "scan_0042.pdf"},
+                          {"document_id": "b", "filename": "Gone.pdf"}]),
+        row("R", sources=[{"document_id": "a", "filename": "scan_0042.pdf"}]),
+        row("S"),
+    ]
+
+    def test_each_cited_document_once(self) -> None:
+        self.assertEqual(cited_document_ids(self.ROWS), ["a", "b"])
+
+    def test_a_renamed_document_shows_its_name_now(self) -> None:
+        got = current_sources(self.ROWS, {"a": "Sick leave policy.pdf"})
+        self.assertEqual([s["filename"] for s in got[0]["sources"]], ["Sick leave policy.pdf", "Gone.pdf"])
+        self.assertEqual(got[1]["sources"][0]["filename"], "Sick leave policy.pdf")
+        self.assertEqual(got[2]["sources"], [])
+
+    def test_the_rows_are_otherwise_untouched(self) -> None:
+        got = current_sources(self.ROWS, {"a": "New.pdf"})
+        self.assertEqual(got[0]["question"], "Q")
+        self.assertEqual(self.ROWS[0]["sources"][0]["filename"], "scan_0042.pdf")
 
 
 class NormalizeTests(unittest.TestCase):
