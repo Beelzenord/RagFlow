@@ -551,6 +551,43 @@ body.is-dragging-docs .rail-item[data-drop-hint] {
   margin: 0;
 }
 
+/* --- Re-index progress and result ------------------------------------------------ */
+
+.reindex-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.reindex-status[hidden] {
+  display: none;
+}
+
+.reindex-status.has-failures {
+  border-color: var(--err);
+}
+
+.reindex-status progress {
+  flex: 1;
+  min-width: 80px;
+  max-width: 220px;
+  accent-color: var(--accent);
+}
+
+.reindex-status time {
+  color: var(--muted);
+}
+
+.reindex-status .btn-icon {
+  margin-left: auto;
+}
+
 /* --- Toolbar ------------------------------------------------------------------- */
 
 .toolbar {

@@ -43,6 +43,7 @@ ADMIN_ROUTES = [
     ("PUT", f"/api/documents/{DOC}/audience", {"everyone": True}),
     ("PUT", "/api/documents/audience", {"document_ids": [DOC], "everyone": True}),
     ("POST", "/api/documents/rechunk-all", None),
+    ("GET", "/api/documents/rechunk-status", None),
     ("PATCH", f"/api/documents/{DOC}", {"filename": "Sick leave policy"}),
 ]
 
@@ -134,6 +135,13 @@ class MarketsProxyTests(_Harness):
         client = self.client("admin")
         client.patch(f"/api/documents/{DOC}", json={"filename": "Sick leave policy", "status": "completed"})
         self.assertEqual(self.calls[0]["json"], {"filename": "Sick leave policy"})
+
+    def test_reindex_progress_is_not_taken_for_a_document_id(self) -> None:
+        client = self.client("admin")
+        self.reply = (200, {"running": True, "total": 8, "done": 3})
+        resp = client.get("/api/documents/rechunk-status")
+        self.assertEqual(resp.json()["done"], 3)
+        self.assertTrue(self.calls[0]["url"].endswith("/documents/rechunk-status"))
 
     def test_a_malformed_rename_never_reaches_ingestion(self) -> None:
         client = self.client("admin")
