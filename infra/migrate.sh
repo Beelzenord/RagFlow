@@ -15,7 +15,6 @@ run_sql() {
   echo "→ $(basename "$file")"
   if az postgres flexible-server execute \
     --name "$POSTGRES_SERVER" \
-    --resource-group "$RESOURCE_GROUP" \
     --admin-user "$POSTGRES_USER" \
     --admin-password "$POSTGRES_PASSWORD" \
     --database-name "$POSTGRES_DB" \
@@ -39,31 +38,35 @@ run_sql "$REPO_ROOT/db/migrations/02-schema.sql"
 run_sql "$REPO_ROOT/db/migrations/05-markets.sql"
 run_sql "$REPO_ROOT/db/migrations/06-answer-log.sql"
 
-echo "→ verify extensions, columns and market tables"
-VERIFY='SELECT extname FROM pg_extension ORDER BY 1;
-SELECT column_name, data_type
+echo "→ verify extensions, columns and tables"
+
+# One query per call: az returns the rows of the last statement only.
+verify() {
+  if az postgres flexible-server execute \
+    --name "$POSTGRES_SERVER" \
+    --admin-user "$POSTGRES_USER" \
+    --admin-password "$POSTGRES_PASSWORD" \
+    --database-name "$POSTGRES_DB" \
+    --querytext "$1"; then
+    return 0
+  fi
+  if command -v psql >/dev/null 2>&1; then
+    PGPASSWORD="$POSTGRES_PASSWORD" psql \
+      "host=$POSTGRES_FQDN port=5432 dbname=$POSTGRES_DB user=$POSTGRES_USER sslmode=require" \
+      -c "$1"
+  fi
+}
+
+verify 'SELECT extname FROM pg_extension ORDER BY 1;'
+verify 'SELECT column_name, data_type
   FROM information_schema.columns
  WHERE table_name = '\''document_chunks'\''
    AND column_name IN ('\''embedding'\'','\''content_tsv'\'')
- ORDER BY 1;
-SELECT tablename
-  FROM pg_tables
- WHERE tablename IN ('\''markets'\'','\''market_groups'\'','\''market_group_members'\'','\''document_audience'\'')
  ORDER BY 1;'
-
-if az postgres flexible-server execute \
-  --name "$POSTGRES_SERVER" \
-  --resource-group "$RESOURCE_GROUP" \
-  --admin-user "$POSTGRES_USER" \
-  --admin-password "$POSTGRES_PASSWORD" \
-  --database-name "$POSTGRES_DB" \
-  --querytext "$VERIFY"; then
-  :
-elif command -v psql >/dev/null 2>&1; then
-  PGPASSWORD="$POSTGRES_PASSWORD" psql \
-    "host=$POSTGRES_FQDN port=5432 dbname=$POSTGRES_DB user=$POSTGRES_USER sslmode=require" \
-    -c "$VERIFY"
-fi
+verify 'SELECT tablename
+  FROM pg_tables
+ WHERE tablename IN ('\''markets'\'','\''market_groups'\'','\''market_group_members'\'','\''document_audience'\'','\''answer_log'\'')
+ ORDER BY 1;'
 
 echo
 echo "Schema is on $POSTGRES_FQDN/$POSTGRES_DB. Next: ./infra/deploy.sh"
