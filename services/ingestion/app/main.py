@@ -25,6 +25,7 @@ from rag_shared.db import session_scope
 from rag_shared.security import require_service_key
 from rag_shared.settings import settings
 
+from . import reindex
 from .audience import (
     DEFAULT_SORT,
     SORTS,
@@ -115,6 +116,8 @@ _DOCUMENT_COLUMNS = (
     "d.id, d.original_filename, d.file_type, d.status, d.error_message, "
     "d.collection, d.user_id, d.created_at, d.updated_at, "
     "(SELECT count(*) FROM document_chunks WHERE document_id = d.id) AS chunk_count, "
+    "(SELECT max(j.completed_at) FROM ingestion_jobs j "
+    " WHERE j.document_id = d.id AND j.status = 'completed') AS last_indexed_at, "
     + _AUDIENCE_COLUMNS
 )
 
@@ -134,6 +137,13 @@ def _document_out(row: Any) -> dict[str, Any]:
         "groups": groups,
     }
     return doc
+
+
+# Ahead of /documents/{document_id}, which would otherwise take this path for an id.
+@app.get("/documents/rechunk-status", dependencies=[Depends(require_service_key)])
+async def rechunk_status() -> dict[str, Any]:
+    """How far "Re-index all" has got, or how the last one ended."""
+    return reindex.status()
 
 
 @app.get("/documents/{document_id}", dependencies=[Depends(require_service_key)])
@@ -746,7 +756,7 @@ async def rechunk_all(background: BackgroundTasks) -> dict[str, Any]:
     """Rebuild every indexed document's chunks from its stored markdown - after
     a change to the chunker - without parsing anything again: no LlamaParse,
     embeddings only. Documents keep answering with their old chunks until each
-    one's new chunks replace them."""
+    one's new chunks replace them. /documents/rechunk-status follows the run."""
     async with session_scope() as session:
         ids = [
             str(r)
@@ -759,8 +769,12 @@ async def rechunk_all(background: BackgroundTasks) -> dict[str, Any]:
                 )
             ).scalars()
         ]
-    if ids:
-        background.add_task(run_rechunk, ids)
+    if not ids:
+        return {"queued": 0}
+    run = reindex.start(len(ids))
+    if run is None:
+        return {"queued": 0, "already_running": True}
+    background.add_task(run_rechunk, ids, run)
     log.info("rechunk-all queued %d documents", len(ids))
     return {"queued": len(ids)}
 

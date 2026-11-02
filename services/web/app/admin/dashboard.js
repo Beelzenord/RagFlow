@@ -41,6 +41,8 @@ const state = {
   queueBusy: false,
   nextQid: 1,
   tickHandle: null,
+  // The latest "Re-index all", as /api/documents/rechunk-status reports it.
+  reindex: null,
   trayOpen: true,
   // #insights: its filters, the last answer from /api/insights, and which
   // questions are expanded (by wording).
@@ -94,6 +96,7 @@ const els = {
   dropzone: $("dropzone"),
   dropzoneIcon: $("dropzone-icon"),
   detail: $("detail"),
+  reindexStatus: $("reindex-status"),
   detailName: $("detail-name"),
   detailRename: $("detail-rename"),
   renameForm: $("rename-form"),
@@ -1131,10 +1134,93 @@ async function reindexAll() {
   if (!ok) return;
   try {
     const data = await api("/api/documents/rechunk-all", { method: "POST" });
-    const n = data?.queued ?? 0;
-    flash(n ? t("dashboard.reindexStarted", { n }) : t("dashboard.reindexNothing"));
+    if (!data?.queued && !data?.already_running) {
+      flash(t("dashboard.reindexNothing"));
+      return;
+    }
+    if (data.queued) {
+      state.reindex = { running: true, total: data.queued, done: 0 };
+      renderReindex();
+    }
+    watchReindex();
   } catch (err) {
     flash(err.message, "error");
+  }
+}
+
+// A document stays "Ready" while it is re-indexed, answering from its old chunks
+// until the new ones replace them, so the table cannot show any of this. A run
+// that ended within the hour is shown on arrival too: it may have finished after
+// the person left the page.
+
+const REINDEX_TICK_MS = 1000;
+const REINDEX_RESULT_MS = 60 * 60 * 1000;
+
+let reindexTimer = null;
+
+function reindexSummary(run) {
+  const parts = [t("dashboard.reindexDone", { n: run.rebuilt })];
+  if (run.skipped) parts.push(t("dashboard.reindexSkipped", { n: run.skipped }));
+  if (run.failed.length) {
+    parts.push(t("dashboard.reindexFailed", { n: run.failed.length, names: run.failed.join(", ") }));
+  }
+  return parts.join(" ");
+}
+
+function renderReindex() {
+  const run = state.reindex;
+  const node = els.reindexStatus;
+  const recent = run?.finished_at && Date.now() - new Date(run.finished_at).getTime() < REINDEX_RESULT_MS;
+  node.replaceChildren();
+  node.hidden = !run?.running && !recent;
+  if (node.hidden) return;
+  node.classList.toggle("has-failures", !run.running && run.failed.length > 0);
+  // Read out once, at the end, not at every document.
+  node.setAttribute("aria-live", run.running ? "off" : "polite");
+  if (run.running) {
+    const bar = el("progress");
+    bar.max = run.total;
+    bar.value = run.done;
+    node.append(el("span", { text: t("dashboard.reindexProgress", { done: run.done, total: run.total }) }), bar);
+    return;
+  }
+  node.append(
+    el("span", { text: reindexSummary(run) }),
+    timeNode(run.finished_at),
+    el(
+      "button",
+      {
+        type: "button",
+        class: "btn-icon",
+        "aria-label": t("dashboard.close"),
+        title: t("dashboard.close"),
+        onclick: () => {
+          state.reindex = null;
+          renderReindex();
+        },
+      },
+      icon("close"),
+    ),
+  );
+}
+
+async function watchReindex() {
+  clearTimeout(reindexTimer);
+  const wasRunning = Boolean(state.reindex?.running);
+  try {
+    state.reindex = await api("/api/documents/rechunk-status");
+  } catch {
+    // Passing trouble: go on asking while a run is under way.
+    if (wasRunning) reindexTimer = setTimeout(watchReindex, REINDEX_TICK_MS);
+    return;
+  }
+  renderReindex();
+  if (state.reindex.running) {
+    reindexTimer = setTimeout(watchReindex, REINDEX_TICK_MS);
+  } else if (wasRunning) {
+    // No total: ingestion restarted, and the run went with it.
+    if (!state.reindex.total) flash(t("dashboard.reindexStopped"), "error");
+    refreshAfterChange(state.detail ? [state.detail.id] : []);
   }
 }
 
@@ -2007,6 +2093,9 @@ function refreshDetailMeta(doc) {
     facts.push(el("span", { text: t("dashboard.chunks", { n: doc.chunk_count }) }));
   }
   facts.push(el("span", { text: t("dashboard.uploadedOn", { date: formatDate(doc.created_at) }) }));
+  if (doc.last_indexed_at) {
+    facts.push(el("span", { text: t("dashboard.lastIndexed", { when: timeAgo(doc.last_indexed_at) }) }));
+  }
   if (doc.collection) facts.push(el("span", { text: t("dashboard.collectionIs", { name: doc.collection }) }));
   const notes = [];
   if (doc.status === "failed" && doc.error_message) {
@@ -3091,6 +3180,7 @@ document.addEventListener("langchange", () => {
   detailEditor.render();
   dialogEditor.render();
   if (state.detail) refreshDetailMeta(state.detail);
+  renderReindex();
   if (els.groupDialog.open) renderGroupChecklist();
   if (els.countryDialog.open) renderCountryResults();
 });
@@ -3117,3 +3207,4 @@ loadSort();
 renderSortHeaders();
 loadMarkets().finally(applyRoute);
 loadAttentionCount();
+watchReindex();

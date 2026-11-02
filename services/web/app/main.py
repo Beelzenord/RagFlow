@@ -273,6 +273,13 @@ async def api_documents(
     return JSONResponse(status_code=resp.status_code, content=_safe_json(resp))
 
 
+# Ahead of /api/documents/{document_id}, which would otherwise take this path for an id.
+@app.get("/api/documents/rechunk-status", dependencies=[Depends(require_admin)])
+async def api_documents_rechunk_status(request: Request) -> JSONResponse:
+    """How far "Re-index all" has got, for the Dashboard."""
+    return await _forward(request, "GET", f"{INGESTION_URL}/documents/rechunk-status")
+
+
 @app.get("/api/documents/{document_id}", dependencies=[Depends(require_admin)])
 async def api_document(document_id: UUID, request: Request) -> JSONResponse:
     """One document's ingestion status, polled while an upload is processing."""

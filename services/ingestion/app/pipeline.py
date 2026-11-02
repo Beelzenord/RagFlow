@@ -10,6 +10,7 @@ from rag_shared.db import session_scope
 from rag_shared.embeddings import EmbeddingClient
 from rag_shared.chunking import chunk_markdown
 from .parser import parse_to_markdown
+from .reindex import ReindexRun
 from .storage import save_markdown
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,18 @@ async def _finish_job(session, job_id: str, status: str, error: str | None = Non
             "WHERE id = :id"
         ),
         {"s": status, "e": error, "id": job_id},
+    )
+
+
+async def _record_rebuild(session, document_id: str, status: str, error: str | None = None) -> None:
+    """One document's re-index, as a finished job. With the new chunks, in their
+    transaction, so "last indexed" cannot claim a rebuild that rolled back."""
+    await session.execute(
+        text(
+            "INSERT INTO ingestion_jobs (document_id, status, started_at, completed_at, error_message) "
+            "VALUES (:d, :s, now(), now(), :e)"
+        ),
+        {"d": document_id, "s": status, "e": error},
     )
 
 
@@ -176,7 +189,7 @@ async def run_ingestion(document_id: str, storage_path: str, file_type: str) -> 
         await run_rechunk([document_id])
 
 
-async def run_rechunk(document_ids: list[str]) -> None:
+async def run_rechunk(document_ids: list[str], run: ReindexRun | None = None) -> None:
     """Rebuild the chunks of these documents from the markdown already stored -
     after a change to chunking - without parsing anything again, so it costs
     embeddings only.
@@ -184,12 +197,15 @@ async def run_rechunk(document_ids: list[str]) -> None:
     One document at a time, to keep the embedding rate gentle. A document keeps
     its status throughout, so it goes on answering questions with its old
     chunks until the new ones replace them in one transaction; one that fails
-    simply keeps the old chunks.
+    simply keeps the old chunks. `run` is where the Dashboard reads how far
+    "Re-index all" has got.
     """
-    embedder = EmbeddingClient()
-    done = failed = 0
+    run = run or ReindexRun(total=len(document_ids))
+    embedder: EmbeddingClient | None = None
     try:
+        embedder = EmbeddingClient()
         for document_id in document_ids:
+            name = ""
             try:
                 async with session_scope() as session:
                     row = (
@@ -202,22 +218,37 @@ async def run_rechunk(document_ids: list[str]) -> None:
                         )
                     ).mappings().first()
                 if not row or not (row["markdown_text"] or "").strip():
+                    run.skipped += 1
                     continue
+                name = row["original_filename"] or ""
                 chunks = chunk_markdown(row["markdown_text"])
                 if not chunks:
+                    run.skipped += 1
                     continue
-                embeddings = await _embed_chunks(embedder, chunks, row["original_filename"] or "")
+                embeddings = await _embed_chunks(embedder, chunks, name)
                 async with session_scope() as session:
                     # Renamed since this began: these vectors carry the old
                     # name, and the rename has queued its own re-chunk.
-                    if await _current_filename(session, document_id, lock=True) != (row["original_filename"] or ""):
+                    if await _current_filename(session, document_id, lock=True) != name:
                         log.info("re-chunking skipped document_id=%s: renamed meanwhile", document_id)
+                        run.skipped += 1
                         continue
                     await _replace_chunks(session, document_id, chunks, embeddings)
-                done += 1
-            except Exception:  # noqa: BLE001 - the old chunks stay; carry on with the rest
-                failed += 1
+                    await _record_rebuild(session, document_id, "completed")
+                run.rebuilt += 1
+            except Exception as exc:  # noqa: BLE001 - the old chunks stay; carry on with the rest
+                run.failed.append(name or document_id)
                 log.exception("re-chunking failed document_id=%s", document_id)
+                try:
+                    async with session_scope() as session:
+                        await _record_rebuild(session, document_id, "failed", str(exc)[:500])
+                except Exception:  # noqa: BLE001 - the run still reports it
+                    log.exception("could not record the failure document_id=%s", document_id)
+    except Exception:  # noqa: BLE001 - no embedder: none of the rest can be rebuilt
+        log.exception("re-chunking stopped")
+        run.failed.extend(document_ids[run.handled :])
     finally:
-        await embedder.aclose()
-    log.info("re-chunking finished: %d rebuilt, %d failed", done, failed)
+        if embedder is not None:
+            await embedder.aclose()
+        run.finish()
+    log.info("re-chunking finished: %d rebuilt, %d failed", run.rebuilt, len(run.failed))
